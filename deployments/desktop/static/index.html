@@ -123,8 +123,19 @@
                 </div>
               </div>
 
-              <div id="pushMeta" class="meta-line">尚未加载推荐批次。</div>
-              <div id="paperList" class="paper-list empty">请先拉取今日论文，或加载最近一次推荐。</div>
+              <div id="pushMeta" class="meta-line" role="status" aria-live="polite">尚未加载推荐批次。</div>
+
+              <div class="triage-bar">
+                <div id="triageProgress" class="triage-progress" role="progressbar" aria-valuemin="0" aria-valuenow="0" aria-valuemax="0" hidden>
+                  <span id="triageProgressText" class="triage-progress-text">已处理 0 / 0 篇</span>
+                </div>
+                <div class="triage-controls">
+                  <button id="hideTriagedToggle" class="mini-button" type="button" aria-pressed="false">只看未处理</button>
+                  <button id="shortcutHelpToggle" class="mini-button" type="button" title="键盘快捷键">按 ? 查看键盘快捷键</button>
+                </div>
+              </div>
+
+              <div id="paperList" class="paper-list empty" role="list">请先拉取今日论文，或加载最近一次推荐。</div>
 
               <div class="submit-bar">
                 <div>
@@ -450,6 +461,7 @@
     </div>
 
     <div id="feedbackToast" class="feedback-toast" role="status" aria-live="polite" hidden></div>
+    <div id="shortcutHelp" class="shortcut-overlay" hidden></div>
 
     <script src="desktop.js"></script>
   </body>

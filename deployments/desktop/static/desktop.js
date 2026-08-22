@@ -4,6 +4,7 @@
   const DEMO_MODE = new URLSearchParams(window.location.search).get("demo") === "1";
   const LOCALE_KEY = "paperflow.desktop.locale";
   const REPORT_HIGHLIGHTS_KEY = "paperflow.report.cardHighlights";
+  const UI_PREFS_KEY = "paperflow.desktop.uiPrefs";
   const REPORT_LIST_LIMIT = 500;
   const supportedLocales = new Set(["zh", "en"]);
   const requestedLocale = new URLSearchParams(window.location.search).get("lang");
@@ -56,6 +57,12 @@
     dailyTaskUserId: "",
     dailyPollToken: 0,
     dailyPolling: false,
+    // Keyboard triage: index of the focused card in the rendered order, the
+    // last mark applied (for undo), and whether decided papers are hidden.
+    focusedPaperNumber: null,
+    lastTriageAction: null,
+    hideTriaged: false,
+    shortcutHelpOpen: false,
     settings: null
   };
 
@@ -139,6 +146,27 @@
         generating: "生成中",
         selectionHelp: "选择会写入本地反馈；精读报告会进入报告库，并成为 Wiki 的候选知识条目。",
         selectionSummary: (read, skip, later) => `待提交：${read} 篇精读，${skip} 篇不感兴趣，${later} 篇稍后看`,
+        triageProgress: (done, total) => `已处理 ${done} / ${total} 篇`,
+        triageAllDone: (total) => `已处理全部 ${total} 篇`,
+        hideTriagedLabel: "只看未处理",
+        shortcutHintTitle: "键盘快捷键",
+        shortcutHint: "按 ? 查看键盘快捷键",
+        shortcutHelp: [
+          ["J / ↓", "下一篇"],
+          ["K / ↑", "上一篇"],
+          ["1 或 R", "标记精读"],
+          ["2 或 X", "标记不感兴趣"],
+          ["3 或 L", "标记稍后看"],
+          ["U", "撤销上一次标记"],
+          ["O", "打开论文原文链接"],
+          ["H", "只看未处理 开/关"],
+          ["?", "显示/隐藏本帮助"],
+          ["Esc", "关闭本帮助"],
+        ],
+        shortcutHelpClose: "关闭",
+        undoNothing: "没有可撤销的标记",
+        undoDone: (number) => `已撤销论文 ${number} 的标记`,
+        noPaperFocused: "请先用 J / K 选中一篇论文",
         taskStatus: (task) => `任务 ${task.task_id || ""} · ${task.status || "queued"} · ${task.progress_phase || "等待后端返回进度"}`,
         taskPending: "后台仍在拉取和排序论文，完成后会显示正式推荐列表。",
         llmUnknownModel: "未识别模型",
@@ -585,6 +613,27 @@
         generating: "Generating",
         selectionHelp: "Choices are written to local feedback; reading reports enter the report library and become candidate Wiki entries.",
         selectionSummary: (read, skip, later) => `Pending: ${read} deep-read, ${skip} not interested, ${later} later`,
+        triageProgress: (done, total) => `${done} / ${total} reviewed`,
+        triageAllDone: (total) => `All ${total} reviewed`,
+        hideTriagedLabel: "Untriaged only",
+        shortcutHintTitle: "Keyboard shortcuts",
+        shortcutHint: "Press ? for keyboard shortcuts",
+        shortcutHelp: [
+          ["J / ↓", "Next paper"],
+          ["K / ↑", "Previous paper"],
+          ["1 or R", "Mark for deep read"],
+          ["2 or X", "Mark not interested"],
+          ["3 or L", "Mark for later"],
+          ["U", "Undo last mark"],
+          ["O", "Open the paper link"],
+          ["H", "Toggle untriaged-only"],
+          ["?", "Show/hide this help"],
+          ["Esc", "Close this help"],
+        ],
+        shortcutHelpClose: "Close",
+        undoNothing: "Nothing to undo",
+        undoDone: (number) => `Undid the mark on paper ${number}`,
+        noPaperFocused: "Select a paper with J / K first",
         taskStatus: (task) => `Task ${task.task_id || ""} · ${task.status || "queued"} · ${task.progress_phase || "waiting for backend progress"}`,
         taskPending: "The backend is still fetching and ranking papers. The official list will appear when it completes.",
         llmUnknownModel: "Unknown model",
@@ -1322,6 +1371,11 @@
     if ($("pushMeta")?.classList.contains("empty") || $("pushMeta")?.textContent === i18n.zh.papers.pushEmpty || $("pushMeta")?.textContent === i18n.en.papers.pushEmpty) $("pushMeta").textContent = text.papers.pushEmpty;
     if ($("paperList")?.classList.contains("empty") && !$("paperList")?.classList.contains("syncing")) $("paperList").textContent = text.papers.listEmpty;
     setText(".submit-bar p", text.papers.selectionHelp);
+    setText("#hideTriagedToggle", text.papers.hideTriagedLabel);
+    setText("#shortcutHelpToggle", text.papers.shortcutHint);
+    setAttr("#shortcutHelpToggle", "title", text.papers.shortcutHintTitle);
+    updateTriageProgress();
+    if (state.shortcutHelpOpen) renderShortcutHelp();
     if ($("submitFeedbackBtn") && !$("submitFeedbackBtn").disabled) $("submitFeedbackBtn").textContent = text.papers.submitFeedback;
     if ($("submitAndReadBtn") && !$("submitAndReadBtn").disabled) $("submitAndReadBtn").textContent = text.papers.submitAndRead;
 
@@ -2044,6 +2098,7 @@
         console.error(error);
       });
     }
+    persistUiPrefs();
   }
 
   function currentUser() {
@@ -2264,11 +2319,15 @@
       const isReading = state.paperReading.has(reportKey);
       const score = normalizeScore(paper.score ?? paper.relevance ?? paper.relevance_score ?? 80);
       const tags = paperDisplayTags(paper);
+      const title = paper.title || "Untitled Paper";
+      // Each action button names its paper so a screen reader announces
+      // "not interested, <title>" instead of three bare verbs per card.
+      const actionLabel = (verb) => escapeHtml(`${verb} — ${title}`);
       return `
-        <article class="paper-card" data-paper-number="${number}">
+        <article class="paper-card" role="listitem" tabindex="-1" data-paper-number="${number}" aria-label="${escapeHtml(`#${number} ${title}`)}">
           <div class="score-ring" style="--score: ${Math.min(score, 100)}%">${score}%</div>
           <div class="paper-content">
-            <h3>${escapeHtml(paper.title || "Untitled Paper")}</h3>
+            <h3>${escapeHtml(title)}</h3>
             <p class="paper-authors">${escapeHtml(Array.isArray(paper.authors) ? paper.authors.join(", ") : (paper.authors || paper.author || ui().papers.authorPending))}</p>
             <p class="paper-abstract">${escapeHtml(paper.abstract || paper.summary || "")}</p>
             <div class="paper-tags">
@@ -2276,12 +2335,17 @@
             </div>
           </div>
           <div class="paper-actions">
-            <button data-action="read" data-number="${number}" class="${reportId ? "ready" : ""} ${isReading ? "loading" : ""}" type="button" ${isReading ? "disabled" : ""}>${isReading ? ui().papers.loading : reportId ? ui().papers.readReport : ui().papers.read}</button>
-            <button data-action="skip" data-number="${number}" type="button">${ui().papers.skip}</button>
-            <button data-action="later" data-number="${number}" type="button">${ui().papers.later}</button>
+            <button data-action="read" data-number="${number}" class="${reportId ? "ready" : ""} ${isReading ? "loading" : ""}" type="button" ${isReading ? "disabled" : ""} aria-label="${actionLabel(ui().papers.read)}">${isReading ? ui().papers.loading : reportId ? ui().papers.readReport : ui().papers.read}</button>
+            <button data-action="skip" data-number="${number}" type="button" aria-label="${actionLabel(ui().papers.skip)}">${ui().papers.skip}</button>
+            <button data-action="later" data-number="${number}" type="button" aria-label="${actionLabel(ui().papers.later)}">${ui().papers.later}</button>
           </div>
         </article>`;
     }).join("");
+    // A fresh render replaces every card, so the keyboard cursor and the
+    // untriaged-only filter have to be re-applied to the new nodes.
+    state.focusedPaperNumber = null;
+    state.lastTriageAction = null;
+    applyTriageFilter();
     updateSelectionSummary();
   }
 
@@ -2391,10 +2455,284 @@
     });
   }
 
+  // ==========================================================================
+  // Keyboard triage
+  //
+  // A daily pull can render hundreds of cards -- 239 papers across ~36000px of
+  // scroll in local testing -- and every decision previously needed a mouse
+  // click on one of three buttons per card. These helpers add j/k navigation
+  // and single-key marking so the list can be worked through from the keyboard.
+  // ==========================================================================
+
+  function paperCards() {
+    return [...document.querySelectorAll(".paper-card")];
+  }
+
+  function visiblePaperCards() {
+    return paperCards().filter((card) => !card.hidden);
+  }
+
+  function paperDisposition(number) {
+    if (state.selected.has(number)) return "read";
+    if (state.skipped.has(number)) return "skip";
+    if (state.later.has(number)) return "later";
+    return "";
+  }
+
+  function focusPaperCard(number, { scroll = true } = {}) {
+    state.focusedPaperNumber = number;
+    let target = null;
+    paperCards().forEach((card) => {
+      const isTarget = Number(card.dataset.paperNumber) === number;
+      card.classList.toggle("keyboard-focus", isTarget);
+      if (isTarget) target = card;
+    });
+    if (target && scroll) {
+      // "nearest" avoids yanking the viewport when the card is already visible.
+      target.scrollIntoView({ block: "nearest", behavior: "auto" });
+      target.focus({ preventScroll: true });
+    }
+    return target;
+  }
+
+  function movePaperFocus(delta) {
+    const cards = visiblePaperCards();
+    if (!cards.length) return;
+    const numbers = cards.map((card) => Number(card.dataset.paperNumber));
+    const current = numbers.indexOf(state.focusedPaperNumber);
+    // No selection yet: J starts at the top, K starts at the bottom.
+    const nextIndex = current === -1
+      ? (delta > 0 ? 0 : numbers.length - 1)
+      : Math.min(numbers.length - 1, Math.max(0, current + delta));
+    focusPaperCard(numbers[nextIndex]);
+  }
+
+  function triageFocusedPaper(action) {
+    if (state.focusedPaperNumber === null) {
+      // Marking with nothing focused would be a silent no-op, so aim at the
+      // first visible card instead of ignoring the keystroke.
+      const cards = visiblePaperCards();
+      if (!cards.length) return;
+      focusPaperCard(Number(cards[0].dataset.paperNumber));
+    }
+    const number = state.focusedPaperNumber;
+    const previous = paperDisposition(number);
+    setPaperDisposition(number, action);
+    state.lastTriageAction = { number, previous };
+
+    // Advance so a run of decisions needs one keystroke each. When decided
+    // papers are hidden the current card disappears, and the next one takes
+    // its position, so focus should stay put.
+    if (state.hideTriaged) {
+      applyTriageFilter();
+      const cards = visiblePaperCards();
+      const stillVisible = cards.some((card) => Number(card.dataset.paperNumber) === number);
+      if (!stillVisible) {
+        const next = cards.find((card) => Number(card.dataset.paperNumber) > number) || cards[0];
+        if (next) focusPaperCard(Number(next.dataset.paperNumber));
+        else state.focusedPaperNumber = null;
+        return;
+      }
+    }
+    movePaperFocus(1);
+  }
+
+  function undoLastTriage() {
+    const last = state.lastTriageAction;
+    if (!last) {
+      showPaperFeedback("success", ui().papers.undoNothing, ui().papers.dispositionHelp);
+      return;
+    }
+    state.selected.delete(last.number);
+    state.skipped.delete(last.number);
+    state.later.delete(last.number);
+    if (last.previous === "read") state.selected.add(last.number);
+    if (last.previous === "skip") state.skipped.add(last.number);
+    if (last.previous === "later") state.later.add(last.number);
+    state.lastTriageAction = null;
+    updateSelectionSummary();
+    focusPaperCard(last.number);
+    showPaperFeedback("success", ui().papers.undoDone(last.number), ui().papers.dispositionHelp);
+  }
+
+  function openFocusedPaper() {
+    if (state.focusedPaperNumber === null) {
+      showPaperFeedback("error", ui().papers.noPaperFocused, ui().papers.dispositionHelp);
+      return;
+    }
+    const paper = (state.push?.papers || []).find(
+      (item, index) => Number(item.number || index + 1) === state.focusedPaperNumber
+    );
+    const url = paper?.paper_url || paper?.url || paper?.abs_url || paper?.pdf_url;
+    if (url) window.open(url, "_blank", "noopener");
+  }
+
+  function applyTriageFilter() {
+    const hide = Boolean(state.hideTriaged);
+    paperCards().forEach((card) => {
+      const decided = Boolean(paperDisposition(Number(card.dataset.paperNumber)));
+      card.hidden = hide && decided;
+    });
+    const toggle = $("hideTriagedToggle");
+    if (toggle) toggle.setAttribute("aria-pressed", hide ? "true" : "false");
+  }
+
+  function toggleHideTriaged() {
+    state.hideTriaged = !state.hideTriaged;
+    persistUiPrefs();
+    applyTriageFilter();
+    // The focused card may have just been hidden.
+    const cards = visiblePaperCards();
+    if (state.focusedPaperNumber !== null
+        && !cards.some((card) => Number(card.dataset.paperNumber) === state.focusedPaperNumber)) {
+      if (cards.length) focusPaperCard(Number(cards[0].dataset.paperNumber));
+      else state.focusedPaperNumber = null;
+    }
+  }
+
+  function renderShortcutHelp() {
+    const overlay = $("shortcutHelp");
+    if (!overlay) return;
+    const rows = ui().papers.shortcutHelp
+      .map(([keys, description]) => `
+        <div class="shortcut-row">
+          <kbd>${escapeHtml(keys)}</kbd>
+          <span>${escapeHtml(description)}</span>
+        </div>`)
+      .join("");
+    overlay.innerHTML = `
+      <div class="shortcut-panel" role="dialog" aria-modal="true" aria-label="${escapeHtml(ui().papers.shortcutHintTitle)}">
+        <h2>${escapeHtml(ui().papers.shortcutHintTitle)}</h2>
+        ${rows}
+        <button type="button" id="shortcutHelpClose">${escapeHtml(ui().papers.shortcutHelpClose)}</button>
+      </div>`;
+    $("shortcutHelpClose").addEventListener("click", () => toggleShortcutHelp(false));
+  }
+
+  function toggleShortcutHelp(force) {
+    const overlay = $("shortcutHelp");
+    if (!overlay) return;
+    const open = typeof force === "boolean" ? force : !state.shortcutHelpOpen;
+    state.shortcutHelpOpen = open;
+    if (open) renderShortcutHelp();
+    overlay.hidden = !open;
+  }
+
+  function isTypingTarget(element) {
+    if (!element) return false;
+    const tag = element.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || element.isContentEditable;
+  }
+
+  function handleTriageKey(event) {
+    if (state.shortcutHelpOpen && (event.key === "Escape" || event.key === "?")) {
+      toggleShortcutHelp(false);
+      event.preventDefault();
+      return;
+    }
+    // Never hijack keys while the user is typing, and stay out of the way of
+    // browser and OS shortcuts.
+    if (isTypingTarget(event.target)) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (state.currentView !== "papers") return;
+
+    switch (event.key) {
+      case "j":
+      case "J":
+      case "ArrowDown":
+        movePaperFocus(1); break;
+      case "k":
+      case "K":
+      case "ArrowUp":
+        movePaperFocus(-1); break;
+      case "1":
+      case "r":
+      case "R":
+        triageFocusedPaper("read"); break;
+      case "2":
+      case "x":
+      case "X":
+        triageFocusedPaper("skip"); break;
+      case "3":
+      case "l":
+      case "L":
+        triageFocusedPaper("later"); break;
+      case "u":
+      case "U":
+        undoLastTriage(); break;
+      case "o":
+      case "O":
+        openFocusedPaper(); break;
+      case "h":
+      case "H":
+        toggleHideTriaged(); break;
+      case "?":
+        toggleShortcutHelp(); break;
+      default:
+        return;
+    }
+    // Only reached when a shortcut matched, so arrow-key scrolling and "/"
+    // quick-find are preserved everywhere else.
+    event.preventDefault();
+  }
+
+  function updateTriageProgress() {
+    const bar = $("triageProgress");
+    if (!bar) return;
+    const total = paperCards().length;
+    if (!total) {
+      bar.hidden = true;
+      return;
+    }
+    const done = state.selected.size + state.skipped.size + state.later.size;
+    const percent = Math.round((done / total) * 100);
+    bar.hidden = false;
+    bar.style.setProperty("--triage-progress", `${percent}%`);
+    bar.dataset.complete = done >= total ? "true" : "false";
+    const label = done >= total
+      ? ui().papers.triageAllDone(total)
+      : ui().papers.triageProgress(done, total);
+    const text = $("triageProgressText");
+    if (text) text.textContent = label;
+    bar.setAttribute("aria-valuenow", String(done));
+    bar.setAttribute("aria-valuemax", String(total));
+    bar.setAttribute("aria-valuetext", label);
+  }
+
+  // --------------------------------------------------------------------------
+  // Persisted view preferences. Only the locale and report annotations used to
+  // survive a reload, so the active view, date, day span and untriaged-only
+  // toggle were all reset every time the page was refreshed.
+  // --------------------------------------------------------------------------
+
+  function persistUiPrefs() {
+    try {
+      window.localStorage.setItem(UI_PREFS_KEY, JSON.stringify({
+        view: state.currentView || "papers",
+        hideTriaged: Boolean(state.hideTriaged),
+        paperDate: $("paperDate")?.value || "",
+        days: $("daysInput")?.value || "",
+        wikiView: state.wikiView || "graph",
+      }));
+    } catch (error) {
+      // Private browsing or a full quota; preferences are a convenience only.
+    }
+  }
+
+  function readUiPrefs() {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(UI_PREFS_KEY) || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
   function updateSelectionSummary() {
     $("selectedStat").textContent = state.selected.size;
     $("readingQueueStat").textContent = state.selected.size;
     $("selectionSummary").textContent = ui().papers.selectionSummary(state.selected.size, state.skipped.size, state.later.size);
+    updateTriageProgress();
     document.querySelectorAll(".paper-card").forEach((card) => {
       const number = Number(card.dataset.paperNumber);
       const disposition = state.selected.has(number)
@@ -5466,12 +5804,31 @@
     });
 
     $("paperDate").value = todayDateValue();
+    // Restore remembered controls before the first sync so the UI comes back
+    // the way it was left instead of resetting to today/1 on every reload.
+    const savedPrefs = readUiPrefs();
+    if (savedPrefs.paperDate) $("paperDate").value = savedPrefs.paperDate;
+    if (savedPrefs.days) $("daysInput").value = savedPrefs.days;
+    if (savedPrefs.hideTriaged) state.hideTriaged = true;
     syncDateControls();
     $("prevDayBtn").addEventListener("click", () => shiftDate(-1));
     $("nextDayBtn").addEventListener("click", () => shiftDate(1));
-    $("paperDate").addEventListener("change", syncDateControls);
-    $("daysInput").addEventListener("change", syncDateControls);
+    $("paperDate").addEventListener("change", () => { syncDateControls(); persistUiPrefs(); });
+    $("daysInput").addEventListener("change", () => { syncDateControls(); persistUiPrefs(); });
     $("runDailyBtn").addEventListener("click", () => runAction(runDaily, "拉取论文"));
+    $("hideTriagedToggle")?.addEventListener("click", toggleHideTriaged);
+    $("shortcutHelpToggle")?.addEventListener("click", () => toggleShortcutHelp());
+    $("shortcutHelp")?.addEventListener("click", (event) => {
+      // Click the backdrop (not the panel) to dismiss.
+      if (event.target === $("shortcutHelp")) toggleShortcutHelp(false);
+    });
+    document.addEventListener("keydown", handleTriageKey);
+    // Clicking a card makes it the keyboard cursor, so mouse and keyboard
+    // interaction do not fight over which paper is "current".
+    $("paperList").addEventListener("mousedown", (event) => {
+      const card = event.target.closest?.(".paper-card");
+      if (card) focusPaperCard(Number(card.dataset.paperNumber), { scroll: false });
+    });
     $("sortRelevanceBtn")?.addEventListener("click", () => {
       if (!state.push?.papers?.length) {
         showFeedbackToast("warning", ui().papers.noSortableTitle, ui().papers.noSortableDetail);
@@ -5828,7 +6185,11 @@
     await loadWiki();
     await loadSettings();
     await resumeDailyTask();
-    const initialView = window.location.hash.slice(1) || "papers";
+    // An explicit #hash wins over the remembered view: a shared or bookmarked
+    // link should land where it points.
+    const prefs = readUiPrefs();
+    const hashView = window.location.hash.slice(1);
+    const initialView = hashView || prefs.view || "papers";
     setView(document.getElementById(initialView) ? initialView : "papers", false);
   }
 
