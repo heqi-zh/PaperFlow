@@ -26,6 +26,7 @@ from uuid import uuid4
 import yaml
 
 from paperflow.providers import build_llm_provider
+from paperflow import env as shared_env
 from paperflow import roles as role_utils
 
 
@@ -357,18 +358,18 @@ def _profile_summary(profile: Optional[Dict[str, Any]]) -> Optional[Dict[str, An
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    """Delegate to the shared parser.
+
+    This used to be an allowlist (`in {"1","true","yes","on"}`) while the agents
+    that act on the same variables used a denylist, so the settings panel could
+    report a feature as disabled while the agents had it enabled -- most visibly
+    for PAPERFLOW_WIKI_INGEST with a blank value.
+    """
+    return shared_env.env_bool(name, default)
 
 
 def _env_int(name: str, default: int, *, min_value: int = 1, max_value: int = 100000) -> int:
-    try:
-        value = int(str(os.environ.get(name, default)).strip())
-    except (TypeError, ValueError):
-        value = default
-    return max(min_value, min(max_value, value))
+    return shared_env.env_int(name, default, min_value=min_value, max_value=max_value)
 
 
 def _configured_path(env_name: str, default_relative: str) -> str:

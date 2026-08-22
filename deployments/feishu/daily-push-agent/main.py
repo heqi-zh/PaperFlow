@@ -34,6 +34,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # 使用 importlib 导入带连字符的模块
 import importlib
 
+from paperflow import env as shared_env
+
 # 导入多个数据源
 arxiv_fetcher = importlib.import_module("skills.arxiv-fetcher.scripts.fetch_arxiv")
 arxiv_fetch_by_date = arxiv_fetcher.fetch_by_date
@@ -94,15 +96,11 @@ ALLOW_STALE_DAILY_FALLBACK_ENV = "PAPERFLOW_ALLOW_STALE_DAILY_FALLBACK"
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in {"0", "false", "off", "no"}
+    return shared_env.env_bool(name, default)
 
 
 def _env_list(name: str) -> List[str]:
-    raw = os.environ.get(name, "")
-    return [item.strip() for item in re.split(r"[,;\n]", raw) if item.strip()]
+    return shared_env.env_list(name)
 
 
 def _env_positive_int(name: str, default: int = 5, cap: int = 10) -> int:
@@ -319,12 +317,9 @@ def fetch_semantic_scholar_papers(
 
 
 def _wiki_ingest_enabled() -> bool:
-    return os.environ.get("PAPERFLOW_WIKI_INGEST", "1").strip().lower() not in {
-        "0",
-        "false",
-        "off",
-        "no",
-    }
+    # Shared parser so this agrees with the GUI settings panel, which used an
+    # opposite-polarity check and could report ingestion as off while it ran.
+    return shared_env.env_bool("PAPERFLOW_WIKI_INGEST", default=True)
 
 
 def ingest_pushed_paper_to_wiki(

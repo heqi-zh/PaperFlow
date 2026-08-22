@@ -28,6 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # 使用 importlib 导入带连字符的模块
 import importlib
 
+from paperflow import env as shared_env
+
 # 存储辅助
 db_ops = importlib.import_module("skills.storage-helper.scripts.db_ops")
 log_behavior = db_ops.log_behavior
@@ -66,12 +68,9 @@ CATEGORY_LABELS = {
 
 
 def _wiki_ingest_enabled() -> bool:
-    return os.environ.get("PAPERFLOW_WIKI_INGEST", "1").strip().lower() not in {
-        "0",
-        "false",
-        "off",
-        "no",
-    }
+    # Shared parser so this agrees with the GUI settings panel, which used an
+    # opposite-polarity check and could report ingestion as off while it ran.
+    return shared_env.env_bool("PAPERFLOW_WIKI_INGEST", default=True)
 
 
 def ingest_feedback_to_wiki(

@@ -50,6 +50,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 # 使用 importlib 导入带连字符的模块
 import importlib
 
+from paperflow import env as shared_env
+
 # 飞书报告器
 feishu_reporter = importlib.import_module("deployments.feishu.feishu-reporter.scripts.feishu_reporter")
 create_doc = feishu_reporter.create_doc
@@ -322,12 +324,9 @@ def _paper_title_file_stem(paper: Dict[str, Any], *, max_len: int = 96) -> str:
 
 
 def _wiki_ingest_enabled() -> bool:
-    return os.environ.get("PAPERFLOW_WIKI_INGEST", "1").strip().lower() not in {
-        "0",
-        "false",
-        "off",
-        "no",
-    }
+    # Shared parser so this agrees with the GUI settings panel, which used an
+    # opposite-polarity check and could report ingestion as off while it ran.
+    return shared_env.env_bool("PAPERFLOW_WIKI_INGEST", default=True)
 
 
 def ingest_reading_report_to_wiki(
