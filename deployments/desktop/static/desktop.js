@@ -5,6 +5,13 @@
   const LOCALE_KEY = "paperflow.desktop.locale";
   const REPORT_HIGHLIGHTS_KEY = "paperflow.report.cardHighlights";
   const UI_PREFS_KEY = "paperflow.desktop.uiPrefs";
+  // Default ceiling for a single API call. Generous on purpose: this is a
+  // backstop against a wedged server, not a latency budget. Genuinely
+  // long-running work (daily pull, reading reports) is already start+poll, so
+  // no individual request should approach this. Endpoints that do synchronous
+  // LLM or network work pass a longer timeoutMs.
+  const API_TIMEOUT_MS = 120000;
+  const API_TIMEOUT_LONG_MS = 600000;
   const REPORT_LIST_LIMIT = 500;
   const supportedLocales = new Set(["zh", "en"]);
   const requestedLocale = new URLSearchParams(window.location.search).get("lang");
@@ -74,6 +81,9 @@
       common: {
         operationFailed: "操作失败",
         requestFailed: "请求失败",
+        requestTimeout: (seconds) => `请求超过 ${seconds} 秒没有响应，已中断。请确认本地服务仍在运行。`,
+        requestOffline: "无法连接本地服务。请确认 paperflow gui 仍在运行，且端口没有变化。",
+        requestBadResponse: (status) => `本地服务返回了非预期内容（HTTP ${status}），可能已崩溃或被代理拦截。`,
         notConfigured: "未配置",
         updated: "已更新",
         yes: "是",
@@ -541,6 +551,9 @@
       common: {
         operationFailed: "Action failed",
         requestFailed: "Request failed",
+        requestTimeout: (seconds) => `No response after ${seconds}s, request aborted. Check that the local server is still running.`,
+        requestOffline: "Cannot reach the local server. Check that paperflow gui is still running on the same port.",
+        requestBadResponse: (status) => `The local server returned an unexpected response (HTTP ${status}); it may have crashed or been intercepted by a proxy.`,
         notConfigured: "Not configured",
         updated: "Updated",
         yes: "Yes",
@@ -1775,11 +1788,51 @@
 
   async function api(path, options = {}) {
     if (DEMO_MODE) return demoApi(path, options);
-    const response = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
-      ...options
-    });
-    const data = await response.json();
+
+    // Without a timeout a hung backend leaves the UI spinning with no way back;
+    // callers that pass their own signal (streaming endpoints) keep it.
+    const { timeoutMs: requestedTimeout, ...fetchOptions } = options;
+    const timeoutMs = Number(requestedTimeout || API_TIMEOUT_MS);
+    const controller = fetchOptions.signal ? null : new AbortController();
+    const timer = controller ? window.setTimeout(() => controller.abort(), timeoutMs) : null;
+
+    let response;
+    try {
+      response = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...fetchOptions,
+        // Applied last so it is not clobbered by a spread caller option.
+        ...(controller ? { signal: controller.signal } : {})
+      });
+    } catch (networkError) {
+      if (networkError?.name === "AbortError") {
+        const error = new Error(ui().common.requestTimeout(Math.round(timeoutMs / 1000)));
+        error.path = path;
+        throw error;
+      }
+      // Server stopped, port changed, machine asleep: say so plainly instead of
+      // surfacing "Failed to fetch".
+      const error = new Error(ui().common.requestOffline);
+      error.path = path;
+      error.cause = networkError;
+      throw error;
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      // A crash page, proxy error or captive portal yields HTML here, which
+      // previously surfaced as "SyntaxError: Unexpected token '<'".
+      const error = new Error(ui().common.requestBadResponse(response.status));
+      error.status = response.status;
+      error.path = path;
+      error.cause = parseError;
+      throw error;
+    }
+
     if (!data.ok) {
       const error = new Error(data.error || ui().common.requestFailed);
       error.status = response.status;
@@ -2244,6 +2297,7 @@
     try {
       const data = await api("/api/provider-test", {
         method: "POST",
+        timeoutMs: API_TIMEOUT_LONG_MS,
         body: JSON.stringify({ kind: "llm" })
       });
       const provider = String(data.provider || "").toLowerCase();
@@ -4436,6 +4490,7 @@
   async function refreshWiki() {
     const data = await api("/api/wiki/refresh", {
       method: "POST",
+      timeoutMs: API_TIMEOUT_LONG_MS,
       body: JSON.stringify({ user_id: currentUser() })
     });
     await loadWiki();
@@ -4466,6 +4521,7 @@
     try {
       const data = await api("/api/github/sync", {
         method: "POST",
+        timeoutMs: API_TIMEOUT_LONG_MS,
         body: JSON.stringify({ user_id: currentUser(), response_language: responseLanguage() })
       });
       await loadSettings();
@@ -5095,7 +5151,7 @@
         } catch (streamError) {
           console.warn("Streaming Wiki ask failed, falling back to JSON.", streamError);
           showFeedbackToast("warning", ui().chat.streamInterruptedTitle, ui().chat.streamInterruptedDetail);
-          data = await api("/api/wiki/ask", { method: "POST", body: JSON.stringify(payload) });
+          data = await api("/api/wiki/ask", { method: "POST", timeoutMs: API_TIMEOUT_LONG_MS, body: JSON.stringify(payload) });
           const citations = normalizeCitations(data);
           const currentMeta = message.querySelector(".answer-meta");
           if (currentMeta) currentMeta.outerHTML = renderAnswerMeta(data, citations);
@@ -5714,7 +5770,7 @@
   }
 
   async function testProvider(kind) {
-    const data = await api("/api/provider-test", { method: "POST", body: JSON.stringify({ kind }) });
+    const data = await api("/api/provider-test", { method: "POST", timeoutMs: API_TIMEOUT_LONG_MS, body: JSON.stringify({ kind }) });
     $("providerTestOutput").className = "answer";
     $("providerTestOutput").textContent = JSON.stringify(data, null, 2);
   }
@@ -5742,6 +5798,7 @@
   async function exportData(format) {
     const data = await api("/api/export", {
       method: "POST",
+      timeoutMs: API_TIMEOUT_LONG_MS,
       body: JSON.stringify({ user_id: currentUser(), format })
     });
     showSettingsMessage(ui().settings.exported(data.format, data.display_path || data.path, data.count || 0));
