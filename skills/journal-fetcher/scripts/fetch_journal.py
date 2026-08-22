@@ -31,6 +31,7 @@ except ImportError:
 
 import requests
 import re
+from concurrent.futures import ThreadPoolExecutor
 from html import unescape
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
@@ -133,6 +134,11 @@ JOURNAL_ALIASES = {
 
 JOURNAL_REQUEST_TIMEOUT = float(os.environ.get("JOURNAL_REQUEST_TIMEOUT", "20"))
 JOURNAL_DETAIL_FETCH_ENABLED = os.environ.get("JOURNAL_DETAIL_FETCH_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
+# Extra RSS entries collected beyond `limit` so that candidates dropped by the
+# detail fetch (_skip: corrections, editorials, paywalled stubs) do not leave the
+# result short. Detail pages are now fetched concurrently, so the cost of a few
+# extra is small; unbounded collection would not be.
+JOURNAL_DETAIL_SKIP_HEADROOM = 5
 HTTP_RETRY_TOTAL = int(os.environ.get("PAPERFLOW_HTTP_RETRIES", "2"))
 HTTP_RETRY_BACKOFF = float(os.environ.get("PAPERFLOW_HTTP_BACKOFF", "0.8"))
 DEFAULT_REQUEST_HEADERS = {
@@ -1206,6 +1212,9 @@ def fetch_journal_papers(
         return []
 
     papers = []
+    # Entries are collected first, then their article pages are fetched
+    # concurrently below.
+    candidates: List[Dict[str, Any]] = []
     cutoff_date = datetime.now() - timedelta(days=days)
 
     try:
@@ -1213,7 +1222,12 @@ def fetch_journal_papers(
         feed = feedparser.parse(journal_info["rss_url"])
 
         for entry in feed.entries:
-            if len(papers) >= limit:
+            # Bound on collected candidates, not on accepted papers: detail
+            # fetching now happens after this loop. Some candidates are dropped
+            # later by _skip, so this can under-fill relative to the old
+            # behaviour; the extra headroom keeps the common case identical
+            # without fetching an unbounded number of article pages.
+            if len(candidates) >= limit + JOURNAL_DETAIL_SKIP_HEADROOM:
                 break
 
             # 提取论文信息
@@ -1227,7 +1241,7 @@ def fetch_journal_papers(
             if not _looks_like_research_article(entry, journal_key):
                 continue
 
-            paper = {
+            candidates.append({
                 "title": entry.get('title', 'Unknown'),
                 "abstract": _clean_abstract_text(entry.get('summary', entry.get('description', ''))),
                 "authors": extract_authors_from_rss(entry),
@@ -1238,12 +1252,33 @@ def fetch_journal_papers(
                 "publish_date": published.isoformat(),
                 "categories": [journal_key],
                 "source": "rss",
-            }
-            detail = _fetch_article_detail(paper["url"])
+            })
+
+        # Enrich from the article pages. This was one blocking request per paper,
+        # which dominated a single journal's runtime (Science measured 48s,
+        # Science Advances 60s for 10 papers). _http_get builds and closes its own
+        # session per call, so there is no shared state to guard. executor.map
+        # keeps feed order, and _skip filtering stays positional.
+        detail_workers = _journal_detail_concurrency(len(candidates))
+        if len(candidates) > 1 and detail_workers > 1:
+            def fetch_detail(candidate: Dict[str, Any]) -> Dict[str, Any]:
+                try:
+                    return _fetch_article_detail(candidate["url"])
+                except Exception as exc:
+                    print(f"  Detail fetch error for {candidate.get('url')}: {exc}")
+                    return {}
+
+            with ThreadPoolExecutor(max_workers=detail_workers) as executor:
+                details = list(executor.map(fetch_detail, candidates))
+        else:
+            details = [_fetch_article_detail(candidate["url"]) for candidate in candidates]
+
+        for candidate, detail in zip(candidates, details):
             if detail.get("_skip"):
                 continue
-            paper = _merge_detail_into_paper(paper, detail)
-            papers.append(paper)
+            papers.append(_merge_detail_into_paper(candidate, detail))
+            if len(papers) >= limit:
+                break
 
     except Exception as e:
         print(f"Error fetching {journal_info['name']}: {e}")
@@ -1350,6 +1385,40 @@ def fetch_by_date(
     return unique_papers[:limit]
 
 
+def _journal_detail_concurrency(candidate_count: int) -> int:
+    """Workers for per-article detail fetches within a single journal.
+
+    Unlike the journal-level pool these all hit the *same* publisher host, so the
+    cap is deliberately low. Override with PAPERFLOW_JOURNAL_DETAIL_CONCURRENCY.
+    """
+    if candidate_count <= 1:
+        return 1
+    raw = str(os.environ.get("PAPERFLOW_JOURNAL_DETAIL_CONCURRENCY", "")).strip()
+    try:
+        configured = int(raw) if raw else 4
+    except ValueError:
+        configured = 4
+    return max(1, min(configured, candidate_count, 8))
+
+
+def _journal_fetch_concurrency(source_count: int) -> int:
+    """Workers to use when fetching journals in parallel.
+
+    Each journal is a different publisher host, so this is not hammering a single
+    server. Capped conservatively anyway (and overridable via
+    PAPERFLOW_JOURNAL_CONCURRENCY) because these are polite-use RSS endpoints and
+    some publishers rate-limit aggressively.
+    """
+    if source_count <= 1:
+        return 1
+    raw = str(os.environ.get("PAPERFLOW_JOURNAL_CONCURRENCY", "")).strip()
+    try:
+        configured = int(raw) if raw else 6
+    except ValueError:
+        configured = 6
+    return max(1, min(configured, source_count, 12))
+
+
 def get_recent_papers(
     days: int = 7,
     journals: List[str] = None,
@@ -1379,13 +1448,32 @@ def get_recent_papers(
 
     all_papers = []
 
-    for journal in normalized_journals:
-        papers = fetch_journal_papers(
-            journal=journal,
-            limit=limit_per_journal,
-            days=days
-        )
-        all_papers.extend(papers)
+    # Each journal is an independent RSS fetch plus optional detail-page
+    # enrichment, so the serial loop this replaces spent its time waiting: 12
+    # journals measured 91.66s end to end. executor.map preserves input order,
+    # which keeps the dedup below deterministic -- the first journal listed still
+    # wins for a paper that appears in several feeds.
+    max_workers = _journal_fetch_concurrency(len(normalized_journals))
+    if len(normalized_journals) > 1 and max_workers > 1:
+        def fetch_one(journal: str) -> List[Dict[str, Any]]:
+            try:
+                return fetch_journal_papers(journal=journal, limit=limit_per_journal, days=days)
+            except Exception as exc:
+                # One unreachable feed must not abort the whole pull.
+                print(f"  Journal fetch error for {journal}: {exc}")
+                return []
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for papers in executor.map(fetch_one, normalized_journals):
+                all_papers.extend(papers)
+    else:
+        for journal in normalized_journals:
+            papers = fetch_journal_papers(
+                journal=journal,
+                limit=limit_per_journal,
+                days=days
+            )
+            all_papers.extend(papers)
 
     # 去重
     seen = set()

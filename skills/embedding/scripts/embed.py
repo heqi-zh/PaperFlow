@@ -14,8 +14,9 @@ import hashlib
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -507,6 +508,23 @@ class EmbeddingService:
         self._save_cached(normalized_text, embedding)
         return embedding
 
+    def _batch_concurrency(self, batch_count: int) -> int:
+        """Concurrent embedding requests to issue.
+
+        Kept modest by default: these all hit one provider endpoint, and
+        over-parallelising invites 429s that would trip the hash fallback and
+        silently degrade recommendation quality. Override with
+        PAPERFLOW_EMBED_CONCURRENCY.
+        """
+        if batch_count <= 1:
+            return 1
+        raw = str(os.environ.get("PAPERFLOW_EMBED_CONCURRENCY", "")).strip()
+        try:
+            configured = int(raw) if raw else 4
+        except ValueError:
+            configured = 4
+        return max(1, min(configured, batch_count, 8))
+
     def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         normalized_texts = [self._normalize_text(text) for text in texts]
         results: List[Optional[List[float]]] = [None] * len(normalized_texts)
@@ -523,16 +541,36 @@ class EmbeddingService:
                 missing_indices.append(index)
 
         if missing_indices and self.provider == "openai" and self.client is not None:
+            batches = [
+                missing_indices[batch_start:batch_start + batch_size]
+                for batch_start in range(0, len(missing_indices), batch_size)
+            ]
+
+            def embed_one_batch(batch_indices: List[int]) -> List[Tuple[int, List[float]]]:
+                batch_texts = [normalized_texts[index] for index in batch_indices]
+                kwargs: Dict[str, Any] = {"model": self.model, "input": batch_texts}
+                if self.model.startswith("text-embedding-3"):
+                    kwargs["dimensions"] = self.dimensions
+                response = self.client.embeddings.create(**kwargs)
+                return [
+                    (index, self._resize_vector(list(item.embedding)))
+                    for index, item in zip(batch_indices, response.data)
+                ]
+
             try:
-                for batch_start in range(0, len(missing_indices), batch_size):
-                    batch_indices = missing_indices[batch_start:batch_start + batch_size]
-                    batch_texts = [normalized_texts[index] for index in batch_indices]
-                    kwargs: Dict[str, Any] = {"model": self.model, "input": batch_texts}
-                    if self.model.startswith("text-embedding-3"):
-                        kwargs["dimensions"] = self.dimensions
-                    response = self.client.embeddings.create(**kwargs)
-                    for index, item in zip(batch_indices, response.data):
-                        embedding = self._resize_vector(list(item.embedding))
+                # Batches are independent API round trips; issuing them serially
+                # meant 120 uncached texts took 126.5s. The OpenAI client is
+                # thread-safe and each cache entry is its own file, so the only
+                # shared state is the pre-sized results list, written by index.
+                workers = self._batch_concurrency(len(batches))
+                if len(batches) > 1 and workers > 1:
+                    with ThreadPoolExecutor(max_workers=workers) as executor:
+                        batch_results = list(executor.map(embed_one_batch, batches))
+                else:
+                    batch_results = [embed_one_batch(batch) for batch in batches]
+
+                for pairs in batch_results:
+                    for index, embedding in pairs:
                         results[index] = embedding
                         self._save_cached(normalized_texts[index], embedding)
             except Exception as exc:
