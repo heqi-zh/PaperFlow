@@ -3305,3 +3305,280 @@ body.chat-view .source-list.empty {
     justify-self: stretch;
   }
 }
+
+/* ==========================================================================
+   Narrow viewports, keyboard focus, and motion/contrast preferences.
+
+   The layout previously bottomed out at a 1024px min-width, so any window
+   narrower than that forced horizontal scrolling -- at a 768px viewport 264px
+   of the UI sat off-screen, including the user picker and every paper action
+   button. These rules let the shell reflow instead.
+   ========================================================================== */
+
+/* Tablet and narrow laptop windows: allow the shell to reflow. */
+@media (max-width: 1023px) {
+  body {
+    min-width: 0;
+  }
+
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  /* The icon rail becomes a horizontal strip above the workspace. */
+  .rail {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 12px;
+    height: auto;
+    padding: 10px 14px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+
+  .rail-nav {
+    display: flex;
+    /* The base rule stacks these vertically; the horizontal strip needs it
+       reset explicitly. */
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    width: auto;
+    overflow-x: auto;
+    /* Momentum scrolling without a visible bar on the nav strip. */
+    scrollbar-width: none;
+  }
+
+  .rail-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .rail-item {
+    flex: 0 0 auto;
+    flex-direction: row;
+    gap: 6px;
+    /* Base rule fixes this at 68px for the vertical rail. */
+    height: auto;
+    min-height: 36px;
+    padding: 8px 12px;
+    white-space: nowrap;
+  }
+
+  /* Health text is supplementary; it costs a row that narrow screens need. */
+  .rail-health {
+    display: none;
+  }
+
+  .workspace {
+    padding: 16px;
+  }
+
+  .topbar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+  }
+
+  /* control-strip is a fixed 5-column grid (38px 160px 38px 104px auto) whose
+     track sum cannot shrink, which pushed the whole paper column past the
+     viewport edge. Switch it to flow layout at narrow widths. */
+  .control-strip {
+    display: flex;
+    flex-wrap: wrap;
+    grid-template-columns: none;
+    align-items: center;
+  }
+
+  .control-strip #paperDate {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  /* Grid and flex children only shrink below their content's intrinsic width
+     when min-width is explicitly zeroed. */
+  .workspace,
+  .view,
+  .recommend-layout,
+  .paper-main,
+  .metric-strip,
+  .source-config,
+  .source-grid,
+  .source-group,
+  .paper-card,
+  .paper-content {
+    min-width: 0;
+  }
+
+  /* wiki-toolbar is `auto 132px 128px minmax(280px, 1fr) auto`, so its tracks
+     alone exceed a narrow viewport. Flow instead of a fixed grid. */
+  .wiki-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    grid-template-columns: none;
+  }
+
+  .wiki-toolbar #wikiQuery {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  /* Long stats strings (they include a full filesystem path) must wrap rather
+     than widen their container. The base rule sets white-space: nowrap, which
+     overrides overflow-wrap, so it has to be reset too. */
+  #wikiStats {
+    flex: 1 1 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .wiki-main,
+  .wiki-layout,
+  .reports-layout,
+  .chat-layout,
+  .report-reader,
+  .chat-main {
+    min-width: 0;
+  }
+
+  /* Stop the primary action from stretching to ~880px on wide screens and
+     from being pushed off-screen on narrow ones. */
+  #runDailyBtn {
+    flex: 1 1 220px;
+    min-width: 200px;
+  }
+
+  .metric-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .source-grid,
+  .direct-read-grid,
+  .reports-layout,
+  .recommend-layout,
+  .wiki-layout,
+  .chat-layout,
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .submit-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  /* Paper actions sit beside the abstract on wide screens; stack them under
+     the content here so they stay reachable without horizontal scrolling. */
+  .paper-card {
+    grid-template-columns: auto 1fr;
+  }
+
+  .paper-actions {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .paper-actions button {
+    flex: 1 1 auto;
+  }
+}
+
+/* Phone-width windows. */
+@media (max-width: 620px) {
+  .workspace {
+    padding: 12px;
+  }
+
+  .metric-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .paper-card {
+    grid-template-columns: 1fr;
+  }
+
+  .score-ring {
+    justify-self: start;
+  }
+
+  .source-settings,
+  .profile-card,
+  .profile-info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Keyboard focus. Interactive elements relied on the browser's default 1px
+   outline, which is easy to lose against these surfaces. :focus-visible keeps
+   the ring for keyboard users without ringing every mouse click.
+   -------------------------------------------------------------------------- */
+:where(button, a, select, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.rail-item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Skip link: lets keyboard users jump past the nav rail to the content. */
+.skip-to-content {
+  position: absolute;
+  left: 12px;
+  top: -60px;
+  z-index: 100;
+  padding: 10px 16px;
+  border-radius: 0 0 10px 10px;
+  background: var(--blue);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.15s ease-in;
+}
+
+.skip-to-content:focus,
+.skip-to-content:focus-visible {
+  top: 0;
+}
+
+/* --------------------------------------------------------------------------
+   User preferences.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --line: #94a9c4;
+    --line-strong: #6d84a3;
+    --muted: #4a5a72;
+    --muted-2: #5c6c84;
+  }
+}
+
+/* The workspace carries tabindex="-1" only so the skip link can move focus
+   there. It is not an interactive control, so it should not show a ring. */
+.workspace:focus,
+.workspace:focus-visible {
+  outline: none;
+}
