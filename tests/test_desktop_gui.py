@@ -1763,7 +1763,12 @@ def test_daily_push_semantic_scholar_fetcher_uses_api_key(monkeypatch: pytest.Mo
     monkeypatch.setenv("SEMANTIC_SCHOLAR_API_KEY", "s2-live-test")
     monkeypatch.setattr(agents.daily_agent.urllib.request, "urlopen", fake_urlopen)
 
-    papers = agents.daily_agent.fetch_semantic_scholar_papers(["retrieval"], days=30, limit_per_source=5)
+    # Pin target_date to the fixture's publication date. Without it the fetcher
+    # filters against a window ending today, so the row would age out of range
+    # and this test would start failing on a date unrelated to the assertion.
+    papers = agents.daily_agent.fetch_semantic_scholar_papers(
+        ["retrieval"], days=30, limit_per_source=5, target_date="2026-06-01"
+    )
 
     assert captured_headers["X-api-key"] == "s2-live-test"
     assert papers[0]["title"] == "Semantic Paper"
