@@ -9,21 +9,78 @@ Provides CRUD operations for:
 - Task status
 """
 
+import os
 import sqlite3
 import json
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Iterator, Optional, List, Dict, Any
 
-DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "paperflow.db"
+_DEFAULT_DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "paperflow.db"
+
+# PAPERFLOW_DB_PATH lets deployments relocate runtime state (containers, shared
+# volumes, multi-profile setups) without editing this module. Tests reassign the
+# module-level DB_PATH directly, so get_connection() resolves it per call.
+DB_PATH = Path(os.environ.get("PAPERFLOW_DB_PATH", "").strip() or _DEFAULT_DB_PATH)
+
+# How long a writer waits for a competing write to drain before raising
+# "database is locked". The desktop GUI runs background threads and the Feishu
+# deployment runs a scheduler, so concurrent writers are normal here.
+_BUSY_TIMEOUT_MS = max(0, int(os.environ.get("PAPERFLOW_DB_BUSY_TIMEOUT_MS", "5000") or 0))
 
 
 def get_connection() -> sqlite3.Connection:
-    """Get database connection"""
-    conn = sqlite3.connect(DB_PATH)
+    """Open a connection with concurrency pragmas applied.
+
+    WAL lets readers proceed while a writer holds the write lock, which matters
+    because the GUI polls task state while a background pull is committing.
+    Both pragmas are best-effort: WAL is unavailable on some filesystems and for
+    in-memory databases, and failing to set it must not break plain CRUD.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=_BUSY_TIMEOUT_MS / 1000.0)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+    except sqlite3.Error:
+        pass
     return conn
+
+
+@contextmanager
+def connection() -> Iterator[sqlite3.Connection]:
+    """Connection scope that always closes, even when the body raises.
+
+    Most helpers in this module call get_connection() and close() as a bare
+    sequence, which leaks the handle on any exception in between. New code
+    should prefer this; under WAL a leaked handle can pin the -wal file and
+    stall checkpointing.
+    """
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def transaction() -> Iterator[sqlite3.Connection]:
+    """Connection scope that commits on success and rolls back on failure.
+
+    Use for multi-statement writes that must not land half-applied.
+    """
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _normalize_identifier(value: Optional[str]) -> Optional[str]:
@@ -623,7 +680,11 @@ def save_paper(
             _normalize_identifier(publish_date),
             json.dumps(embedding) if embedding else None,
             _normalize_identifier(embedding_model) or "hash:hash:768",
-            datetime.now()
+            # Format explicitly rather than passing a datetime: the implicit
+            # sqlite3 adapter is deprecated in 3.12+. isoformat(sep=" ")
+            # reproduces the exact string the adapter used, so existing rows and
+            # the string comparisons elsewhere in this module stay valid.
+            datetime.now().isoformat(sep=" ")
         ))
         conn.commit()
         paper_id = cursor.lastrowid
@@ -654,13 +715,10 @@ def save_paper(
 
 def get_profile(user_id: str) -> Optional[Dict]:
     """Get user profile by user_id"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT profile_json FROM profiles WHERE user_id = ?
-    """, (user_id,))
-    row = cursor.fetchone()
-    conn.close()
+    with connection() as conn:
+        row = conn.execute("""
+            SELECT profile_json FROM profiles WHERE user_id = ?
+        """, (user_id,)).fetchone()
     if row:
         return json.loads(row["profile_json"])
     return None
@@ -671,13 +729,10 @@ def get_paper_by_arxiv_id(arxiv_id: str) -> Optional[Dict]:
     normalized_arxiv_id = _normalize_identifier(arxiv_id)
     if not normalized_arxiv_id:
         return None
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM papers WHERE arxiv_id = ?
-    """, (normalized_arxiv_id,))
-    row = cursor.fetchone()
-    conn.close()
+    with connection() as conn:
+        row = conn.execute("""
+            SELECT * FROM papers WHERE arxiv_id = ?
+        """, (normalized_arxiv_id,)).fetchone()
     if row:
         return _build_paper_dict(row)
     return None
@@ -685,30 +740,24 @@ def get_paper_by_arxiv_id(arxiv_id: str) -> Optional[Dict]:
 
 def update_profile(user_id: str, profile_json: Dict) -> bool:
     """Update user profile"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE profiles
-        SET profile_json = ?, version = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = ?
-    """, (json.dumps(profile_json), profile_json.get("version", "0.1"), user_id))
-    conn.commit()
-    conn.close()
+    with transaction() as conn:
+        conn.execute("""
+            UPDATE profiles
+            SET profile_json = ?, version = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """, (json.dumps(profile_json), profile_json.get("version", "0.1"), user_id))
     return True
 
 
 def get_profile_history(user_id: str, days: int = 7) -> List[Dict]:
     """Get profile history for the past N days"""
-    conn = get_connection()
-    cursor = conn.cursor()
     since_date = datetime.now() - timedelta(days=days)
-    cursor.execute("""
-        SELECT profile_json, updated_at FROM profiles
-        WHERE user_id = ? AND updated_at >= ?
-        ORDER BY updated_at DESC
-    """, (user_id, since_date.isoformat()))
-    rows = cursor.fetchall()
-    conn.close()
+    with connection() as conn:
+        rows = conn.execute("""
+            SELECT profile_json, updated_at FROM profiles
+            WHERE user_id = ? AND updated_at >= ?
+            ORDER BY updated_at DESC
+        """, (user_id, since_date.isoformat())).fetchall()
     return [json.loads(row["profile_json"]) for row in rows]
 
 
@@ -758,13 +807,10 @@ def add_papers_batch(papers_list: List[Dict]) -> int:
 
 def get_paper_by_arxiv(arxiv_id: str) -> Optional[Dict]:
     """Get paper by arxiv_id"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM papers WHERE arxiv_id = ?
-    """, (arxiv_id,))
-    row = cursor.fetchone()
-    conn.close()
+    with connection() as conn:
+        row = conn.execute("""
+            SELECT * FROM papers WHERE arxiv_id = ?
+        """, (arxiv_id,)).fetchone()
     if row:
         return _build_paper_dict(row)
     return None
@@ -772,13 +818,10 @@ def get_paper_by_arxiv(arxiv_id: str) -> Optional[Dict]:
 
 def get_paper_by_doi(doi: str) -> Optional[Dict]:
     """Get paper by doi"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM papers WHERE doi = ?
-    """, (doi,))
-    row = cursor.fetchone()
-    conn.close()
+    with connection() as conn:
+        row = conn.execute("""
+            SELECT * FROM papers WHERE doi = ?
+        """, (doi,)).fetchone()
     if row:
         return _build_paper_dict(row)
     return None
@@ -786,32 +829,26 @@ def get_paper_by_doi(doi: str) -> Optional[Dict]:
 
 def get_unpushed_papers(limit: int = 100) -> List[Dict]:
     """Get papers that haven't been pushed yet"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM papers WHERE pushed = FALSE
-        ORDER BY fetched_at DESC
-        LIMIT ?
-    """, (limit,))
-    rows = cursor.fetchall()
-    conn.close()
+    with connection() as conn:
+        rows = conn.execute("""
+            SELECT * FROM papers WHERE pushed = FALSE
+            ORDER BY fetched_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
     return [dict(row) for row in rows]
 
 
 def mark_pushed(paper_ids: List[int]) -> int:
     """Mark papers as pushed"""
-    conn = get_connection()
-    cursor = conn.cursor()
     push_date = datetime.now().date().isoformat()
-    cursor.executemany("""
-        UPDATE papers
-        SET pushed = TRUE, push_date = ?
-        WHERE id = ?
-    """, [(push_date, paper_id) for paper_id in paper_ids])
-    conn.commit()
-    count = cursor.rowcount
-    conn.close()
-    return count
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.executemany("""
+            UPDATE papers
+            SET pushed = TRUE, push_date = ?
+            WHERE id = ?
+        """, [(push_date, paper_id) for paper_id in paper_ids])
+        return cursor.rowcount
 
 
 # ============== Behavior Log Operations ==============
