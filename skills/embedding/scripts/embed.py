@@ -53,7 +53,15 @@ except ImportError:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "embeddings_cache"
+
+# Resolve the cache through paperflow.runtime so an installed wheel writes to
+# ~/.paperflow instead of site-packages. A checkout still uses <repo>/data.
+try:
+    from paperflow.runtime import data_dir as _resolve_data_dir
+
+    DEFAULT_CACHE_DIR = _resolve_data_dir() / "embeddings_cache"
+except Exception:
+    DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "embeddings_cache"
 
 
 def _is_truthy(value: Optional[str]) -> bool:

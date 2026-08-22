@@ -20,6 +20,18 @@ from typing import Iterator, Optional, List, Dict, Any
 
 _DEFAULT_DB_PATH = Path(__file__).parent.parent.parent.parent / "data" / "paperflow.db"
 
+try:
+    # In an installed wheel the path above resolves inside site-packages, which
+    # is the wrong place for mutable state. paperflow.runtime redirects to
+    # ~/.paperflow while keeping the source-checkout layout unchanged. Imported
+    # defensively so this module still works standalone (tests and scripts load
+    # it directly by file path, without paperflow on sys.path).
+    from paperflow.runtime import db_path as _resolve_db_path
+
+    _DEFAULT_DB_PATH = _resolve_db_path()
+except Exception:
+    pass
+
 # PAPERFLOW_DB_PATH lets deployments relocate runtime state (containers, shared
 # volumes, multi-profile setups) without editing this module. Tests reassign the
 # module-level DB_PATH directly, so get_connection() resolves it per call.
@@ -1344,7 +1356,6 @@ def get_latest_push(user_id: str) -> Optional[Dict]:
     Returns:
         Push information with papers list
     """
-    import json
     conn = get_connection()
     cursor = conn.cursor()
 

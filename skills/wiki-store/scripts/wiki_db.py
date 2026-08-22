@@ -7,7 +7,6 @@ import json
 import os
 import re
 import sqlite3
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -17,7 +16,16 @@ from paperflow import roles as role_utils
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_WIKI_DIR = PROJECT_ROOT / "data" / "wiki"
+
+# In an installed wheel PROJECT_ROOT is site-packages, so the wiki store would
+# be written into the install directory and lost on upgrade. paperflow.runtime
+# resolves to ~/.paperflow there while keeping <repo>/data/wiki in a checkout.
+try:
+    from paperflow.runtime import data_dir as _resolve_data_dir
+
+    DEFAULT_WIKI_DIR = _resolve_data_dir() / "wiki"
+except Exception:
+    DEFAULT_WIKI_DIR = PROJECT_ROOT / "data" / "wiki"
 
 db_ops = importlib.import_module("skills.storage-helper.scripts.db_ops")
 

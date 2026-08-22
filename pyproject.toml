@@ -88,19 +88,45 @@ paperflow = "paperflow.cli:main"
 [tool.setuptools]
 include-package-data = true
 
+# The CLI is a thin wrapper: every command except `demo` shells out to a script
+# under agents/, skills/, deployments/, scripts/ or config/ (see
+# paperflow/cli.py _run_python). Shipping only paperflow* produced a wheel whose
+# very first command failed with "init script not found", because those trees
+# were excluded here. They must be packaged for `pip install paperflow` to work.
+#
+# find_namespace_packages (not find_packages) is required: agents/ and config/
+# have no __init__.py and are imported as namespace packages at runtime. The
+# kebab-case directories are fine -- nothing imports them with an `import`
+# statement, only importlib.import_module("agents.reading-agent.main").
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["paperflow*"]
+namespaces = true
+include = [
+    "paperflow*",
+    "agents*",
+    "skills*",
+    "config*",
+    "deployments*",
+    "scripts*",
+]
 exclude = [
     "tests*",
     "experiments*",
-    "deployments*",
     "data*",
     "docs*",
     "release*",
     "models*",
     "ablation_packages*",
+    "*__pycache__*",
 ]
+
+# Non-Python runtime assets: YAML/JSON config the agents read at startup, and
+# the GUI's static bundle. Without these the wheel installs but the GUI serves
+# nothing and config loading falls back to defaults.
+[tool.setuptools.package-data]
+"config" = ["*.yaml", "*.yml", "*.json"]
+"deployments.desktop.static" = ["*.html", "*.css", "*.js", "*.svg"]
+"deployments.desktop.static.assets" = ["*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

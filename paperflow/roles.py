@@ -33,7 +33,14 @@ def roles_path(*, project_root: Optional[Path] = None) -> Path:
     if configured:
         path = Path(configured).expanduser()
         return path if path.is_absolute() else root / path
-    return root / "data" / "roles.json"
+    if project_root is not None:
+        # An explicit root is a deliberate override (tests, tooling); respect it.
+        return root / "data" / "roles.json"
+    # Otherwise resolve via the runtime root so an installed wheel does not
+    # write role metadata into site-packages.
+    from .runtime import data_dir
+
+    return data_dir() / "roles.json"
 
 
 def load_roles_meta(*, project_root: Optional[Path] = None) -> Dict[str, Any]:

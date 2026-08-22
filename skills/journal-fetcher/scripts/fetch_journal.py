@@ -12,11 +12,23 @@ Journal Fetcher - 期刊论文抓取
 数据源：使用各期刊的 RSS Feed 和公开 API
 """
 
-import sys
 import os
 import json
 import logging
-import feedparser
+
+# feedparser ships in the optional [fetch] extra, so a base `pip install
+# paperflow` does not have it. Importing it unguarded made this module fail at
+# import time, which took down `paperflow daily` entirely -- even though journals
+# are only one of several sources. Degrade the same way the OpenReview fetcher
+# does: stay importable and skip the RSS source with a clear message.
+try:
+    import feedparser
+
+    FEEDPARSER_AVAILABLE = True
+except ImportError:
+    feedparser = None
+    FEEDPARSER_AVAILABLE = False
+
 import requests
 import re
 from html import unescape
@@ -1185,6 +1197,13 @@ def fetch_journal_papers(
 
     if journal_info.get("kind") == "ieee_api":
         return fetch_ieee_journal_papers(journal_key=journal_key, limit=limit, days=days)
+
+    if not FEEDPARSER_AVAILABLE:
+        print(
+            f"Skipping {journal_info['name']}: feedparser is not installed. "
+            'Install the fetch extra with: pip install "paperflow[fetch]"'
+        )
+        return []
 
     papers = []
     cutoff_date = datetime.now() - timedelta(days=days)
