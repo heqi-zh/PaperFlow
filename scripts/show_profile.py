@@ -3,11 +3,9 @@
 Show Profile - Display current user profile
 """
 
-import json
 import sys
 import io
 from pathlib import Path
-from datetime import datetime
 
 # Fix Windows console encoding
 if sys.platform == 'win32':

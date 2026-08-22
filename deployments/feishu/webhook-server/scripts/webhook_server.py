@@ -21,7 +21,6 @@ import hashlib
 import hmac
 import base64
 import importlib
-import re
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -577,7 +576,7 @@ class FeishuEventHandler:
             challenge 字符串
         """
         if token != self.verification_token:
-            logger.error(f"Verification token mismatch")
+            logger.error("Verification token mismatch")
             return ""
 
         logger.info("URL verification successful")
@@ -670,7 +669,7 @@ class FeishuEventHandler:
 
         # 过滤 Bot 自己发送的消息（避免循环）
         if sender_type == "app_bot":
-            logger.info(f"Ignoring message from bot (sender_type=app_bot)")
+            logger.info("Ignoring message from bot (sender_type=app_bot)")
             return {"status": "ignored", "reason": "bot_self_message"}
 
         if is_duplicate_message(message_id):

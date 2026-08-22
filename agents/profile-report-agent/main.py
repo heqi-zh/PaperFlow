@@ -16,7 +16,6 @@ import json
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-from pathlib import Path
 from urllib.parse import quote
 
 import requests

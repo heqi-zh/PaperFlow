@@ -3,7 +3,6 @@
 Cold Start Script - Generate initial user profile
 """
 
-import json
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -96,16 +95,16 @@ def main():
     profile_id = create_profile(profile["user_id"], profile)
 
     if profile_id:
-        print(f"\n[OK] Profile created successfully!")
-        print(f"\n--- Profile Summary ---")
+        print("\n[OK] Profile created successfully!")
+        print("\n--- Profile Summary ---")
         print(f"User ID: {profile['user_id']}")
         print(f"Version: {profile['version']}")
-        print(f"\nCore Directions:")
+        print("\nCore Directions:")
         for direction, weight in profile['core_directions'].items():
             print(f"  - {direction}: {weight}")
         print(f"\nMust-read keywords: {profile['must_read']['keywords']}")
     else:
-        print(f"\n[WARN] Profile already exists for user_001")
+        print("\n[WARN] Profile already exists for user_001")
         print("To update, use: /show-profile or modify directly")
 
 

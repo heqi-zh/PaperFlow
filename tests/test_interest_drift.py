@@ -219,3 +219,26 @@ def test_explicit_reading_signal_immediately_activates_short_term_topic_and_seed
     assert "scientific-reasoning" in updated["reading_signal_state"]["short_term_topics"]
     assert updated["reading_signal_state"]["last_signal"]["strength"] == "strong"
     assert updated["reading_signal_state"]["last_signal"]["explicit_note"] == "这类我最近想多看"
+
+
+def test_confirming_direction_lifts_manual_suppression_penalty():
+    """A confirmed direction must not stay under a manual-suppression penalty.
+
+    get_anchor_behavior applies a flat 0.22 suppression_penalty whenever
+    manual_suppressed_topics is non-empty. The master-coordinator's
+    direction-confirmation path seeds the topic at weight 0.80, so leaving it in
+    manual_suppressed_topics meant the user explicitly asked for a topic and it
+    kept being penalized during scoring.
+    """
+    suppressed = profile_updater.get_anchor_behavior(
+        {"drift_state": {"manual_suppressed_topics": ["gui-agent"], "strategy_mode": "real_user"}}
+    )
+    assert suppressed["suppression_penalty"] == 0.22
+    assert "gui-agent" in suppressed["suppressed_topics"]
+
+    # After confirmation the topic is removed from manual_suppressed_topics.
+    lifted = profile_updater.get_anchor_behavior(
+        {"drift_state": {"manual_suppressed_topics": [], "strategy_mode": "real_user"}}
+    )
+    assert lifted["suppression_penalty"] == 0.0
+    assert "gui-agent" not in lifted["suppressed_topics"]

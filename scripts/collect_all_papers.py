@@ -18,7 +18,7 @@ Collect Papers by Date Range - All Sources
 import argparse
 import sqlite3
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 

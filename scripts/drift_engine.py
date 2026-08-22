@@ -18,7 +18,6 @@ Drift Engine - 鍏磋叮婕傜Щ鎵ц寮曟搸
 import json
 import random
 import copy
-import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path

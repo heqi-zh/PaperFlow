@@ -1,7 +1,6 @@
 import importlib
 import json
 import sqlite3
-from pathlib import Path
 
 
 runtime_bootstrap = importlib.import_module("scripts.runtime_bootstrap")

@@ -22,7 +22,7 @@ import os
 import json
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Optional, Any
 
 try:
     from dotenv import load_dotenv
@@ -1623,12 +1623,6 @@ class MasterCoordinator:
             core_directions = dict(updated_profile.get("core_directions", {}) or {})
             topic_weights = dict(updated_profile.get("topic_weights", {}) or {})
             drift_state = dict(updated_profile.get("drift_state", {}) or {})
-            manual_suppressed_topics = [
-                str(topic).strip()
-                for topic in (drift_state.get("manual_suppressed_topics", []) or [])
-                if str(topic).strip()
-            ]
-
             canonical_name = str(confirmed.get("canonical_name") or normalize_direction_key(topic))
             current_weight = max(
                 float(core_directions.get(canonical_name, 0.0)),
@@ -1637,6 +1631,19 @@ class MasterCoordinator:
             seeded_weight = max(current_weight, 0.8)
             core_directions[canonical_name] = seeded_weight
             topic_weights[canonical_name] = seeded_weight
+
+            # Confirming a direction must also lift any manual suppression on it.
+            # manual_suppressed_topics feeds a 0.22 scoring penalty (see
+            # skills/profile-updater compute_drift_adjustment), so a topic the
+            # user previously suppressed and is now explicitly confirming would
+            # otherwise be seeded at weight 0.80 while still being penalized.
+            manual_suppressed_topics = [
+                str(entry).strip()
+                for entry in (drift_state.get("manual_suppressed_topics", []) or [])
+                if str(entry).strip() and str(entry).strip() != canonical_name
+            ]
+            drift_state["manual_suppressed_topics"] = manual_suppressed_topics
+            updated_profile["drift_state"] = drift_state
 
             updated_profile["core_directions"] = core_directions
             updated_profile["topic_weights"] = topic_weights

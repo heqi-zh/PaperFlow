@@ -6,7 +6,7 @@ Paper Processor: Text cleaning, keyword extraction, embedding generation
 import re
 import hashlib
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict
 from pathlib import Path
 
 # OpenAI Embedding (optional)

@@ -166,7 +166,7 @@ def daily(
     if not script.exists():
         script = PROJECT_ROOT / "agents" / "daily-push-agent" / "main.py"
     if not script.exists():
-        typer.echo(f"[error] daily-push agent not found under deployments/feishu/ or agents/", err=True)
+        typer.echo("[error] daily-push agent not found under deployments/feishu/ or agents/", err=True)
         raise typer.Exit(code=1)
     args: list[str] = ["--user-id", user_id, "--days", str(days), "--limit-per-source", str(limit_per_source)]
     if output:

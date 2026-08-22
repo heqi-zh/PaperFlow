@@ -8,13 +8,8 @@
 3. 查看此脚本输出的 chat_id
 """
 
-import sys
-import os
 import json
-from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Dict, Any
-from urllib.parse import urlparse, parse_qs
 import logging
 
 # 配置日志
@@ -75,7 +70,7 @@ class ChatIdFinderHandler(BaseHTTPRequestHandler):
 
                 # 打印 chat_id 信息
                 print("\n" + "="*60)
-                print(f"📱 收到消息！")
+                print("📱 收到消息！")
                 print("="*60)
                 print(f"  chat_id:    {chat_id}")
                 print(f"  open_id:    {open_id}")

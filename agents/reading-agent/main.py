@@ -3737,7 +3737,7 @@ def format_short_summary(paper: Dict) -> str:
 
     lines = []
     lines.append("=" * 60)
-    lines.append(f"📄 精读报告已生成")
+    lines.append("📄 精读报告已生成")
     lines.append("=" * 60)
     lines.append("")
     lines.append(f"**{title}**")

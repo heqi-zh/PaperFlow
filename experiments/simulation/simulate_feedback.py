@@ -137,7 +137,7 @@ def simulate_and_save(user_id: str = "test_user_001", days: int = 7):
     total_papers = len(SAMPLE_PAPERS) * days
     overall_rate = total_selected / total_papers
 
-    print(f"\nSummary:")
+    print("\nSummary:")
     print(f"  Total papers shown: {total_papers}")
     print(f"  Total selected: {total_selected}")
     print(f"  Overall selection rate: {overall_rate:.1%}")

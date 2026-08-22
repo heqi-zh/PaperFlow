@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import threading
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -449,7 +448,6 @@ def run_due_jobs(
         if _is_retry_due(state, daily_job_key, daily_marker, current_time):
             daily_trigger = "retry"
         elif should_run_daily_push(current_time, role_name, state):
-            scheduled_at = _scheduled_datetime(current_time, *get_daily_push_time())
             daily_trigger = "scheduled" if _is_within_schedule_window(current_time, *get_daily_push_time()) else "compensation"
 
         if daily_trigger and _acquire_job(daily_job_key):
@@ -483,7 +481,6 @@ def run_due_jobs(
         if _is_retry_due(state, weekly_job_key, weekly_marker, current_time):
             weekly_trigger = "retry"
         elif should_run_weekly_report(current_time, role_name, state):
-            scheduled_at = _scheduled_datetime(current_time, *get_weekly_report_time(), weekday=get_weekly_report_weekday())
             if current_time.weekday() == get_weekly_report_weekday() and _is_within_schedule_window(current_time, *get_weekly_report_time()):
                 weekly_trigger = "scheduled"
             else:

@@ -1368,7 +1368,6 @@ def fetch_and_process_papers(
 
     allow_stale_fallback = _env_bool(ALLOW_STALE_DAILY_FALLBACK_ENV, default=False)
     fallback_days = max(days, 7)
-    min_candidate_pool = max(10, limit_per_source // 2)
     if allow_stale_fallback and days < fallback_days and not all_papers:
         print(
             f"Candidate pool too small ({len(all_papers)} papers); "
@@ -1921,8 +1920,13 @@ def daily_push(
                     if existing:
                         paper_id = existing["id"]
                         paper["id"] = paper_id
-                except:
-                    pass
+                except Exception as lookup_error:
+                    # A bare `except` here also swallowed KeyboardInterrupt and
+                    # SystemExit, so Ctrl-C during a long pull was ignored.
+                    # Recovering the id is best-effort -- paper_id stays unset
+                    # and the behavior log below is skipped -- but report why it
+                    # failed instead of hiding it.
+                    print(f"  Paper {i+1} id lookup failed: {lookup_error}")
 
         # 记录推送行为（无论论文是否新保存）
         if paper_id:

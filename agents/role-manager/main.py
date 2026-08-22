@@ -19,7 +19,7 @@ import os
 import json
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 
 try:
     from dotenv import load_dotenv
@@ -229,9 +229,7 @@ def delete_role(role_name: str) -> Dict[str, Any]:
     del meta["roles"][role_name]
     save_roles_meta(meta)
 
-    # 删除用户画像（可选，这里只标记删除）
-    user_id = f"user_{role_name}"
-    # 实际删除需要 db_ops 支持，这里暂不实现
+    # 用户画像保留在数据库中：删除画像需要 db_ops 支持，目前尚未实现。
 
     return {
         "success": True,
@@ -254,7 +252,6 @@ def format_role_list(roles_result: Dict) -> str:
     lines.append("")
 
     roles = roles_result.get("roles", [])
-    current = roles_result.get("current_role")
 
     if not roles:
         lines.append("(no roles yet)")
@@ -388,7 +385,6 @@ def process_role_command(
     Returns:
         处理结果
     """
-    import re
 
     command = parse_role_command(command_text)
 

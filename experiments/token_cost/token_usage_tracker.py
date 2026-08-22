@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from collections import defaultdict
 
-import requests
 
 DB_PATH = Path("data/paperflow.db")
 TOKEN_LOG_PATH = Path("data/token_usage.jsonl")
@@ -406,12 +405,12 @@ def main():
             print(f"Date: {result['date']}")
             print(f"LLM Model: {result['llm_model']}")
             print(f"Embedding Model: {result['embedding_model']}")
-            print(f"\nBreakdown:")
+            print("\nBreakdown:")
             for task, data in result["breakdown"].items():
                 print(f"  {task}:")
                 print(f"    Count: {data.get('papers', data.get('users', data.get('reports', 0)))}")
                 print(f"    Tokens: {data['total_tokens']:,} ({data['tokens_per_paper'] if 'tokens_per_paper' in data else data['tokens_per_user'] if 'tokens_per_user' in data else data['tokens_per_report']}/item)")
-            print(f"\nTotal:")
+            print("\nTotal:")
             print(f"  Embedding Tokens: {result['total']['embedding_tokens']:,}")
             print(f"  LLM Tokens: {result['total']['llm_tokens']:,}")
             print(f"  Total Tokens: {result['total']['total_tokens']:,}")

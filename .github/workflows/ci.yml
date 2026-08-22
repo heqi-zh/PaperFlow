@@ -27,13 +27,19 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Lint with flake8
+    - name: Lint with ruff
       run: |
-        pip install flake8
-        # Stop the build if there are Python syntax errors or undefined names
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,__pycache__,.pytest_cache,.venv,venv,data,models,release,ablation_packages,llm_model_experiment_packages,outputs
-        # Exit-zero treats all errors as warnings
-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude=.git,__pycache__,.pytest_cache,.venv,venv,data,models,release,ablation_packages,llm_model_experiment_packages,outputs
+        pip install ruff
+        # Hard gate on real defects: undefined names, redefinitions, unused
+        # imports/variables, bare excepts, mutable default arguments.
+        # B008 is deliberately excluded -- typer.Option()/Argument() in argument
+        # defaults is Typer's documented idiom, not a bug.
+        # pyproject configures ruff (line-length, target-version, select), so
+        # this stays in sync with what developers run locally.
+        ruff check . --select=E9,F,B006,E722 --output-format=concise
+        # Style and modernization findings are advisory for now; the backlog is
+        # large and mostly auto-fixable, so surface it without blocking.
+        ruff check . --exit-zero --statistics
 
     - name: Test with pytest
       run: |
@@ -46,6 +52,77 @@ jobs:
         file: ./coverage.xml
         flags: unittests
         fail_ci_if_error: false
+
+  # Installs the built wheel into a clean venv and drives the CLI from an
+  # unrelated working directory. This is the only job that can catch packaging
+  # regressions: `pip install -e .` puts the repo root on sys.path, so an
+  # editable install masks missing package data entirely. A previous release
+  # shipped a wheel whose very first command failed with "init script not
+  # found" because agents/, skills/, deployments/ and scripts/ were excluded
+  # from the distribution while the CLI shells out to them at runtime.
+  wheel-install:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Build wheel
+      run: |
+        python -m pip install --upgrade pip build
+        python -m build --wheel --outdir dist/
+
+    - name: Install the wheel into a clean environment
+      run: |
+        python -m venv /tmp/pf-venv
+        /tmp/pf-venv/bin/pip install --upgrade pip
+        /tmp/pf-venv/bin/pip install dist/*.whl
+
+    - name: Runtime files must be present in the installed package
+      run: |
+        SP="$(/tmp/pf-venv/bin/python -c 'import paperflow,pathlib;print(pathlib.Path(paperflow.__file__).parent.parent)')"
+        echo "site-packages: $SP"
+        for path in \
+          scripts/init_db.py \
+          scripts/doctor.py \
+          agents/coldstart-agent/main.py \
+          agents/reading-agent/main.py \
+          deployments/desktop/server.py \
+          deployments/desktop/static/index.html \
+          deployments/feishu/daily-push-agent/main.py \
+          skills/storage-helper/scripts/db_ops.py \
+          config/scoring_weights.yaml
+        do
+          test -f "$SP/$path" || { echo "MISSING from wheel: $path"; exit 1; }
+        done
+        echo "All runtime files present"
+
+    - name: CLI must work from an unrelated working directory
+      run: |
+        cd /tmp
+        export HOME=/tmp/pf-home
+        export PAPERFLOW_LLM_PROVIDER=mock
+        export PAPERFLOW_EMBED_PROVIDER=hash
+        /tmp/pf-venv/bin/paperflow init
+        /tmp/pf-venv/bin/paperflow demo
+        /tmp/pf-venv/bin/paperflow profile --user-id ci_user \
+          --natural-language "LLM agents for scientific discovery"
+
+    - name: Mutable state must not be written into site-packages
+      run: |
+        SP="$(/tmp/pf-venv/bin/python -c 'import paperflow,pathlib;print(pathlib.Path(paperflow.__file__).parent.parent)')"
+        if [ -e "$SP/data" ]; then
+          echo "Runtime state leaked into the install directory:"
+          find "$SP/data" | head -20
+          exit 1
+        fi
+        test -f /tmp/pf-home/.paperflow/data/paperflow.db || {
+          echo "Database was not created under the runtime home"; exit 1; }
+        echo "Runtime state correctly isolated from the install directory"
 
   build:
     runs-on: ubuntu-latest

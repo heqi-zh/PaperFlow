@@ -2,14 +2,11 @@
 Tests for database operations
 """
 
-import pytest
-import sqlite3
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "storage-helper" / "scripts"))
 
 from db_ops import (
-    init_db,
     create_profile,
     get_profile,
     update_profile,

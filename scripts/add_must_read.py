@@ -3,7 +3,6 @@
 Add Must Read - Add author/institution/keyword to must-read list
 """
 
-import json
 import sys
 import io
 import re
@@ -195,7 +194,7 @@ def add_must_read(profile, entity_type, entities):
             msg += "\n[提示] 以下宽泛关键词已转为软兴趣方向，不进入硬必读："
             msg += "\n" + "\n".join(f"  - {item}" for item in routed_to_interest)
         if already_exists:
-            msg += f"\n[提示] 已存在：" + ", ".join(already_exists)
+            msg += "\n[提示] 已存在：" + ", ".join(already_exists)
         msg += f"\n\n当前必读{label}清单：\n" + "\n".join(f"  - {e}" for e in current_list)
     elif already_exists:
         msg = f"[提示] {', '.join(already_exists)} 已在必读{label}清单中"

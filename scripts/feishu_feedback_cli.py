@@ -23,7 +23,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 使用 importlib 导入带连字符的模块
 import importlib
-import json
 from datetime import datetime
 
 # 导入 feedback-agent
@@ -41,7 +40,6 @@ def load_today_push() -> list:
     import glob
 
     # 查找今天的推送文件
-    today = datetime.now().strftime("%Y-%m-%d")
     push_files = glob.glob("test_push*.txt")
 
     if not push_files:
@@ -127,7 +125,7 @@ def main():
             feishu_user_id=None  # 不发送飞书确认
         )
 
-        print(f"\n处理结果:")
+        print("\n处理结果:")
         print(f"  选中：{result.get('selected_count', 0)} 篇")
         print(f"  跳过：{result.get('skipped_count', 0)} 篇")
         print(f"  选择率：{result.get('selection_rate', 0):.1%}")

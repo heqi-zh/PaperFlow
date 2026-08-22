@@ -31,7 +31,7 @@ except ImportError:
     pass
 
 try:
-    import openreview
+    import openreview  # noqa: F401  # imported to probe availability
     from openreview.api import OpenReviewClient
     OPENREVIEW_AVAILABLE = True
 except ImportError:

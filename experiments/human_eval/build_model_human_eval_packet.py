@@ -9,7 +9,7 @@ import json
 import random
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
