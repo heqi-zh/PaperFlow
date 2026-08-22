@@ -749,6 +749,57 @@ def _report_source_priority(path: Path) -> int:
         return 10
 
 
+_REPORT_RECORD_CACHE_LOCK = threading.Lock()
+# path -> (mtime_ns, size, parsed record). Parsing a report means reading the
+# whole file and extracting frontmatter, and the reports view rescans every
+# markdown file under the configured directories on each call: 1752 files and
+# 22.8MB in local testing, taking 1.6-2.3s and getting slower as the OS cache
+# churns. list_reports, get_report_content and delete_report each triggered a
+# full scan, so opening one report paid for two.
+_REPORT_RECORD_CACHE: Dict[str, Tuple[int, int, Dict[str, Any]]] = {}
+
+
+def _cached_report_record(path: Path, resolved_key: str) -> Optional[Dict[str, Any]]:
+    """Return the parsed record for path, re-reading only when it changed.
+
+    Keyed on mtime_ns plus size so an edit is always picked up; a stale entry
+    would show the user outdated report content, which is worse than the scan
+    cost this avoids.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        with _REPORT_RECORD_CACHE_LOCK:
+            _REPORT_RECORD_CACHE.pop(resolved_key, None)
+        return None
+
+    signature = (stat.st_mtime_ns, stat.st_size)
+    with _REPORT_RECORD_CACHE_LOCK:
+        cached = _REPORT_RECORD_CACHE.get(resolved_key)
+        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
+            # deepcopy: callers mutate the record (e.g. _source_priority) and
+            # must not corrupt the cached copy.
+            return deepcopy(cached[2])
+
+    try:
+        record = _report_record(path)
+    except OSError:
+        return None
+
+    with _REPORT_RECORD_CACHE_LOCK:
+        _REPORT_RECORD_CACHE[resolved_key] = (signature[0], signature[1], deepcopy(record))
+    return record
+
+
+def invalidate_report_cache(path: Optional[Path] = None) -> None:
+    """Drop cached report records after a write, or all of them when path is None."""
+    with _REPORT_RECORD_CACHE_LOCK:
+        if path is None:
+            _REPORT_RECORD_CACHE.clear()
+            return
+        _REPORT_RECORD_CACHE.pop(str(Path(path).resolve()), None)
+
+
 def _all_report_records() -> List[Dict[str, Any]]:
     reports_by_key: Dict[str, Dict[str, Any]] = {}
     seen: Set[str] = set()
@@ -760,7 +811,9 @@ def _all_report_records() -> List[Dict[str, Any]]:
             if resolved_key in seen:
                 continue
             seen.add(resolved_key)
-            report = _report_record(path)
+            report = _cached_report_record(path, resolved_key)
+            if report is None:
+                continue
             if not _is_reading_report_record(report):
                 continue
             report["_source_priority"] = _report_source_priority(path)
@@ -802,17 +855,47 @@ def _safe_env() -> Dict[str, str]:
     return result
 
 
+_ENV_FILE_CACHE_LOCK = threading.Lock()
+# (mtime_ns, size) -> parsed .env contents. Every _env_text() lookup used to
+# re-read and re-parse .env from disk, and settings-derived paths are consulted
+# per file while scanning reports: 23718 reads of the same file for a single
+# reports refresh, which dominated the runtime. Keyed on mtime+size so an edit
+# through the settings panel is still picked up immediately.
+_ENV_FILE_CACHE: Optional[Tuple[int, int, Dict[str, str]]] = None
+
+
 def _read_env_file() -> Dict[str, str]:
+    global _ENV_FILE_CACHE
+    try:
+        stat = ENV_PATH.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        # No .env at all: nothing to cache, and callers fall back to os.environ.
+        with _ENV_FILE_CACHE_LOCK:
+            _ENV_FILE_CACHE = None
+        return {}
+
+    with _ENV_FILE_CACHE_LOCK:
+        cached = _ENV_FILE_CACHE
+        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
+            return dict(cached[2])
+
     values: Dict[str, str] = {}
-    if not ENV_PATH.exists():
-        return values
-    for raw_line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+    try:
+        raw_text = ENV_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    for raw_line in raw_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
+
+    with _ENV_FILE_CACHE_LOCK:
+        _ENV_FILE_CACHE = (signature[0], signature[1], dict(values))
+    # Copy on the way out so callers cannot mutate the cached mapping.
+    return dict(values)
 
 
 def _env_edit_payload() -> List[Dict[str, str]]:
@@ -3114,6 +3197,9 @@ def delete_report(report_id: str) -> Dict[str, Any]:
         if not any(path == root or path.is_relative_to(root) for root in allowed_roots):
             raise ValueError("Report path is outside configured report directories")
         path.unlink()
+        # A deleted file is never revisited by the mtime check, so drop it here
+        # or it would keep showing up in the list.
+        invalidate_report_cache(path)
         return {
             "deleted": True,
             "report_id": normalized_id,

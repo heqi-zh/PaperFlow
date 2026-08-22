@@ -3803,3 +3803,138 @@ def test_prune_task_registry_tolerates_unparsable_timestamps() -> None:
     agents._prune_task_registry(tasks)
 
     assert sorted(tasks) == ["bad", "missing"]
+
+
+def test_env_file_reads_are_cached_and_invalidated_on_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_read_env_file backs every settings-derived path lookup.
+
+    It was re-reading and re-parsing .env from disk on every call -- 23718 reads
+    of the same file for one reports refresh, which dominated that request.
+    """
+    env_path = tmp_path / ".env"
+    env_path.write_text("PAPERFLOW_LLM_MODEL=first\n", encoding="utf-8")
+    monkeypatch.setattr(agents, "ENV_PATH", env_path)
+    monkeypatch.setattr(agents, "_ENV_FILE_CACHE", None, raising=False)
+
+    reads = {"count": 0}
+    real_read_text = Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        if self == env_path:
+            reads["count"] += 1
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    assert agents._read_env_file()["PAPERFLOW_LLM_MODEL"] == "first"
+    for _ in range(20):
+        agents._read_env_file()
+    assert reads["count"] == 1, "repeat reads should be served from cache"
+
+    # An edit must still be picked up, including one that keeps the same size.
+    env_path.write_text("PAPERFLOW_LLM_MODEL=secnd\n", encoding="utf-8")
+    assert agents._read_env_file()["PAPERFLOW_LLM_MODEL"] == "secnd"
+    assert reads["count"] == 2
+
+
+def test_env_file_cache_does_not_leak_mutable_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("PAPERFLOW_LLM_MODEL=stable\n", encoding="utf-8")
+    monkeypatch.setattr(agents, "ENV_PATH", env_path)
+    monkeypatch.setattr(agents, "_ENV_FILE_CACHE", None, raising=False)
+
+    first = agents._read_env_file()
+    first["PAPERFLOW_LLM_MODEL"] = "mutated"
+
+    assert agents._read_env_file()["PAPERFLOW_LLM_MODEL"] == "stable"
+
+
+def test_missing_env_file_returns_empty_without_caching(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(agents, "ENV_PATH", tmp_path / "absent.env")
+    monkeypatch.setattr(agents, "_ENV_FILE_CACHE", None, raising=False)
+
+    assert agents._read_env_file() == {}
+
+
+def test_report_records_are_reparsed_only_when_the_file_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_all_report_records read and frontmatter-parsed every markdown file on
+    every call (1752 files / 22.8MB locally), and list, open and delete each
+    triggered a full scan."""
+    reports_dir = tmp_path / "reading_reports"
+    reports_dir.mkdir()
+    report = reports_dir / "report-one.md"
+    report.write_text(
+        "---\n"
+        "title: Cached Report\n"
+        "user_id: user_cache\n"
+        "arxiv_id: 2606.00001\n"
+        "report_version: 1\n"
+        "---\n\n"
+        "## Q1\n\nBody text.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agents, "_reading_report_dirs", lambda: [reports_dir])
+    agents.invalidate_report_cache()
+
+    parses = {"count": 0}
+    real_report_record = agents._report_record
+
+    def counting_report_record(path):
+        parses["count"] += 1
+        return real_report_record(path)
+
+    monkeypatch.setattr(agents, "_report_record", counting_report_record)
+
+    first = agents._all_report_records()
+    assert len(first) == 1
+    assert first[0]["title"] == "Cached Report"
+    assert parses["count"] == 1
+
+    for _ in range(5):
+        agents._all_report_records()
+    assert parses["count"] == 1, "unchanged files should not be re-parsed"
+
+    # Editing the report must invalidate it. Same byte length on purpose, so this
+    # only passes if the mtime is part of the cache key.
+    report.write_text(
+        "---\n"
+        "title: Edited Report\n"
+        "user_id: user_cache\n"
+        "arxiv_id: 2606.00001\n"
+        "report_version: 1\n"
+        "---\n\n"
+        "## Q1\n\nBody text.\n",
+        encoding="utf-8",
+    )
+    refreshed = agents._all_report_records()
+    assert refreshed[0]["title"] == "Edited Report"
+    assert parses["count"] == 2
+
+
+def test_report_cache_entry_is_dropped_when_file_disappears(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    reports_dir = tmp_path / "reading_reports"
+    reports_dir.mkdir()
+    report = reports_dir / "report-two.md"
+    report.write_text(
+        "---\ntitle: Doomed\nuser_id: user_cache\narxiv_id: 2606.00002\nreport_version: 1\n---\n\n## Q1\n\nText.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agents, "_reading_report_dirs", lambda: [reports_dir])
+    agents.invalidate_report_cache()
+
+    assert len(agents._all_report_records()) == 1
+
+    report.unlink()
+    agents.invalidate_report_cache(report)
+
+    assert agents._all_report_records() == []

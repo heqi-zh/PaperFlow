@@ -3172,6 +3172,10 @@
 
   function hideReportContextMenu() {
     if (!state.reportContextMenu) return;
+    // Bail out when already hidden. This runs from a capturing scroll listener,
+    // so it fires on every scroll event for the life of the page; once the menu
+    // has been created, without this guard each event did two DOM writes.
+    if (state.reportContextMenu.classList.contains("hidden")) return;
     state.reportContextMenu.classList.add("hidden");
     state.reportContextMenu.dataset.reportId = "";
   }
@@ -5947,9 +5951,21 @@
       if (!row) return;
       event.preventDefault();
       const reportId = row.dataset.reportId;
+      // Show the menu straight away. It previously awaited loadReportContent,
+      // which fetches and re-renders the whole report -- ~190-320ms of latency
+      // for a menu whose two items (highlight, delete) need only the report id
+      // and state already held in memory.
+      showReportContextMenu(reportId, event.clientX, event.clientY);
+      const menuX = event.clientX;
+      const menuY = event.clientY;
+      // Loading the report into the viewer is still useful, but it must not gate
+      // the menu. It re-renders the list, so re-place the menu afterwards if the
+      // user has not already dismissed it or opened another one.
       runAction(async () => {
         await loadReportContent(reportId, true);
-        showReportContextMenu(reportId, event.clientX, event.clientY);
+        if (state.reportContextMenu?.dataset.reportId === reportId) {
+          showReportContextMenu(reportId, menuX, menuY);
+        }
       }, "打开报告菜单");
     });
     document.addEventListener("click", (event) => {
@@ -5958,7 +5974,9 @@
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") hideReportContextMenu();
     });
-    window.addEventListener("scroll", hideReportContextMenu, true);
+    // passive: this never calls preventDefault, so telling the browser up front
+    // keeps it off the scrolling critical path.
+    window.addEventListener("scroll", hideReportContextMenu, { capture: true, passive: true });
     ["openReportAbsBtn", "openReportPdfBtn", "openReportDocBtn"].forEach((id) => {
       $(id).addEventListener("click", () => {
         const href = $(id).dataset.href;
