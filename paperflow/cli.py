@@ -232,6 +232,12 @@ def gui(
     host: str = typer.Option("127.0.0.1", "--host", help="Host interface for the local GUI server."),
     port: int = typer.Option(8765, "--port", "-p", help="Port for the local GUI server."),
     no_browser: bool = typer.Option(False, "--no-browser", help="Do not open the browser automatically."),
+    allow_remote: bool = typer.Option(
+        False,
+        "--allow-remote",
+        help="Permit binding a non-loopback host. The GUI is unauthenticated and its "
+        "settings endpoint can rewrite .env, so only use this on a trusted network.",
+    ),
 ) -> None:
     """Start the local browser GUI."""
     script = PROJECT_ROOT / "deployments" / "desktop" / "server.py"
@@ -241,6 +247,8 @@ def gui(
     args = ["--host", host, "--port", str(port)]
     if no_browser:
         args.append("--no-browser")
+    if allow_remote:
+        args.append("--allow-remote")
     raise typer.Exit(code=_run_python(script, *args))
 
 

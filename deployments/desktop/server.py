@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import mimetypes
 import sys
@@ -594,10 +595,42 @@ class PaperFlowGuiHandler(BaseHTTPRequestHandler):
         sys.stdout.write("[gui] " + fmt % args + "\n")
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
+def _is_loopback_host(host: str) -> bool:
+    """Whether binding to host keeps the server reachable only from this machine."""
+    candidate = str(host or "").strip().strip("[]").lower()
+    if candidate in {"localhost", ""}:
+        return True
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        # A hostname we cannot classify offline; treat as non-loopback so the
+        # explicit opt-in below is required rather than assumed safe.
+        return False
+
+
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+    allow_remote: bool = False,
+) -> None:
+    if not _is_loopback_host(host) and not allow_remote:
+        raise SystemExit(
+            f"Refusing to bind {host}: the GUI has no authentication, and its settings\n"
+            "endpoint can read and rewrite .env (including provider API keys). Anyone\n"
+            "who can reach this port would have that access.\n\n"
+            "Use the default 127.0.0.1, or pass --allow-remote if you genuinely intend\n"
+            "to expose it and the network is trusted."
+        )
+
     server = ThreadingHTTPServer((host, int(port)), PaperFlowGuiHandler)
     url = f"http://{host}:{port}"
     print(f"PaperFlow GUI running at {url}")
+    if not _is_loopback_host(host):
+        print(
+            "WARNING: reachable from other machines with no authentication. "
+            "Anyone who can reach this port can read and modify your settings."
+        )
     print("Press Ctrl+C to stop.")
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
@@ -614,8 +647,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--no-browser", action="store_true", help="Do not open the browser automatically")
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Permit binding a non-loopback address. The GUI is unauthenticated, so only "
+        "use this on a trusted network.",
+    )
     args = parser.parse_args(argv)
-    run_server(host=args.host, port=args.port, open_browser=not args.no_browser)
+    run_server(
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_browser,
+        allow_remote=args.allow_remote,
+    )
     return 0
 
 

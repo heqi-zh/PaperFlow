@@ -4,7 +4,7 @@ import threading
 import time
 import importlib
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -3742,3 +3742,64 @@ def test_obsidian_daily_note_category_uses_word_boundaries() -> None:
     )
 
     assert category == "Machine Learning"
+
+
+def _terminal_task(status: str, minutes_ago: int) -> dict:
+    stamp = (datetime.now().replace(microsecond=0) - timedelta(minutes=minutes_ago)).isoformat()
+    return {"status": status, "completed_at": stamp}
+
+
+def _live_task(status: str, minutes_ago: int) -> dict:
+    stamp = (datetime.now().replace(microsecond=0) - timedelta(minutes=minutes_ago)).isoformat()
+    return {"status": status, "updated_at": stamp}
+
+
+def test_prune_task_registry_drops_expired_terminal_tasks_and_stale_user_index() -> None:
+    tasks = {
+        "old_done": _terminal_task("completed", 120),
+        "fresh_done": _terminal_task("completed", 1),
+        "old_failed": _terminal_task("failed", 500),
+    }
+    by_user = {"u1": "old_done", "u2": "fresh_done"}
+
+    agents._prune_task_registry(tasks, by_user=by_user)
+
+    assert "old_done" not in tasks
+    assert "old_failed" not in tasks
+    # The most recent result stays so a page reload can still read it.
+    assert "fresh_done" in tasks
+    # The user->task index must not keep pointing at a dropped task.
+    assert by_user == {"u2": "fresh_done"}
+
+
+def test_prune_task_registry_never_evicts_queued_or_running_tasks() -> None:
+    """A non-terminal task is still owned by a live thread, whatever its age."""
+    tasks = {
+        "ancient_running": _live_task("running", 10_000),
+        "ancient_queued": _live_task("queued", 10_000),
+    }
+
+    agents._prune_task_registry(tasks)
+
+    assert sorted(tasks) == ["ancient_queued", "ancient_running"]
+
+
+def test_prune_task_registry_caps_burst_of_recent_tasks() -> None:
+    tasks = {f"t{index}": _terminal_task("completed", index) for index in range(1, 200)}
+
+    agents._prune_task_registry(tasks)
+
+    assert len(tasks) <= agents._TASK_RETENTION_MAX
+    # Oldest-first eviction, so the newest task survives the cap.
+    assert "t1" in tasks
+
+
+def test_prune_task_registry_tolerates_unparsable_timestamps() -> None:
+    tasks = {
+        "bad": {"status": "completed", "completed_at": "not-a-timestamp"},
+        "missing": {"status": "completed"},
+    }
+
+    agents._prune_task_registry(tasks)
+
+    assert sorted(tasks) == ["bad", "missing"]

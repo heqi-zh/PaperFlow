@@ -16,9 +16,6 @@ import subprocess
 import threading
 import time
 import zipfile
-import yaml
-from paperflow.providers import build_llm_provider
-from paperflow import roles as role_utils
 from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -27,6 +24,9 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 from uuid import uuid4
 
 import yaml
+
+from paperflow.providers import build_llm_provider
+from paperflow import roles as role_utils
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -2045,6 +2045,69 @@ def _task_timestamp() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
 
 
+# Finished tasks are kept around so the UI can still fetch the result after a
+# reload, but they were never removed: _DAILY_TASKS, _DAILY_TASK_BY_USER and
+# _READING_TASKS only ever grew. A long-lived GUI process accumulated every
+# task it had ever run, each holding a full push payload and preview items.
+_TASK_RETENTION_SECONDS = max(60, _env_int("PAPERFLOW_TASK_RETENTION_SECONDS", 3600, max_value=86400))
+_TASK_RETENTION_MAX = max(8, _env_int("PAPERFLOW_TASK_RETENTION_MAX", 64, max_value=4096))
+_TERMINAL_TASK_STATUSES = {"completed", "failed"}
+
+
+def _task_age_seconds(task: Dict[str, Any], now: datetime) -> float:
+    """Seconds since a task reached a terminal state (0.0 if unknown)."""
+    stamp = str(task.get("completed_at") or task.get("updated_at") or "")
+    if not stamp:
+        return 0.0
+    try:
+        return max(0.0, (now - datetime.fromisoformat(stamp)).total_seconds())
+    except ValueError:
+        return 0.0
+
+
+def _prune_task_registry(
+    tasks: Dict[str, Dict[str, Any]],
+    *,
+    by_user: Optional[Dict[str, str]] = None,
+) -> None:
+    """Drop old terminal tasks. Caller must already hold the matching lock.
+
+    Only terminal tasks are eligible: a queued or running task is still owned by
+    a live thread. Age is the primary criterion; the count cap is a backstop for
+    bursts that all finish within the retention window.
+    """
+    now = datetime.now().replace(microsecond=0)
+    finished = [
+        (task_id, task)
+        for task_id, task in tasks.items()
+        if str(task.get("status") or "") in _TERMINAL_TASK_STATUSES
+    ]
+
+    expired = {
+        task_id
+        for task_id, task in finished
+        if _task_age_seconds(task, now) > _TASK_RETENTION_SECONDS
+    }
+
+    # Oldest-first so the cap keeps the most recent results.
+    if len(finished) - len(expired) > _TASK_RETENTION_MAX:
+        remaining = sorted(
+            ((task_id, task) for task_id, task in finished if task_id not in expired),
+            key=lambda item: _task_age_seconds(item[1], now),
+            reverse=True,
+        )
+        overflow = len(remaining) - _TASK_RETENTION_MAX
+        expired.update(task_id for task_id, _ in remaining[:overflow])
+
+    for task_id in expired:
+        tasks.pop(task_id, None)
+
+    if by_user is not None:
+        for user_id, task_id in list(by_user.items()):
+            if task_id not in tasks:
+                by_user.pop(user_id, None)
+
+
 def _daily_task_payload(task: Dict[str, Any]) -> Dict[str, Any]:
     payload = deepcopy(
         {
@@ -2263,8 +2326,12 @@ def start_daily_push_task(
         task["thread"] = thread
         _DAILY_TASKS[task_id] = task
         _DAILY_TASK_BY_USER[cleaned_user_id] = task_id
+        _prune_task_registry(_DAILY_TASKS, by_user=_DAILY_TASK_BY_USER)
         payload = _daily_task_payload(task)
 
+    # Started outside the lock on purpose: _finish_daily_task acquires
+    # _DAILY_TASK_LOCK immediately, so starting it here would deadlock against
+    # the block above. payload is already a snapshot taken under the lock.
     thread.start()
     return {"task": payload, "already_running": False}
 
@@ -2694,60 +2761,121 @@ def _finish_reading_task(task_id: str) -> None:
     write_feishu = task.get("write_feishu")
     selected_numbers = list(task.get("selected_numbers") or [])
     docs = list(task.get("internal_docs") or [])
+    created_docs_snapshot = list(task.get("created_docs") or [])
     completed_docs: List[Dict[str, Any]] = []
     errors: List[str] = []
 
-    for index, number in enumerate(selected_numbers):
+    if not selected_numbers:
+        with _READING_TASK_LOCK:
+            task = _READING_TASKS.get(task_id)
+            if task:
+                task["status"] = "completed"
+                task["progress_phase"] = "completed"
+                task["completed_docs"] = []
+                task["errors"] = []
+                task["completed_at"] = _task_timestamp()
+                task["updated_at"] = task["completed_at"]
+        return
+
+    # 1) 先把所有选中的论文标记为"精读中"，让前端能实时看到占位文件。
+    running_steps = [
+        "已创建精读报告占位文件。",
+        _reading_language_notice(response_language),
+        "正在解析 PDF；如已配置 MinerU，会优先使用 MinerU。",
+        "正在调用 LLM 生成 Q1-Q7 精读内容。",
+    ]
+    for index, _number in enumerate(selected_numbers):
         doc = docs[index] if index < len(docs) else {}
         paper = doc.get("paper_raw") or doc.get("paper") or {}
         report_path = Path(str(doc.get("report_path") or ""))
+        if not str(report_path):
+            continue
         try:
-            with _READING_TASK_LOCK:
-                task["current_index"] = index + 1
-                task["progress_phase"] = "reading"
-                task["updated_at"] = _task_timestamp()
             _write_reading_placeholder(
                 user_id=user_id,
                 paper=paper,
                 report_path=report_path,
                 status="running",
-                steps=[
-                    "已创建精读报告占位文件。",
-                    _reading_language_notice(response_language),
-                    "正在解析 PDF；如已配置 MinerU，会优先使用 MinerU。",
-                    "正在调用 LLM 生成 Q1-Q7 精读内容。",
-                ],
+                steps=running_steps,
                 response_language=response_language,
             )
-            result = create_reading_reports(
-                user_id=user_id,
-                push_id=push_id,
-                paper_numbers=[number],
-                write_feishu=write_feishu,
-                response_language=response_language,
-            )
-            result_docs = list(result.get("created_docs") or [])
-            completed_docs.extend(result_docs)
+        except Exception:
+            pass
+
+    with _READING_TASK_LOCK:
+        task = _READING_TASKS.get(task_id)
+        if task:
+            task["progress_phase"] = "reading"
+            task["current_index"] = len(selected_numbers)
+            task["updated_at"] = _task_timestamp()
+
+    # 2) 一次性批量生成，交给 reading-agent 内置的并发（PAPERFLOW_READING_REPORT_CONCURRENCY /
+    #    PAPERFLOW_MAX_CONCURRENCY，默认 3）同时精读多篇论文，而不是一篇一篇地串行处理。
+    result_docs: List[Dict[str, Any]] = []
+    batch_error: Optional[str] = None
+    try:
+        result = create_reading_reports(
+            user_id=user_id,
+            push_id=push_id,
+            paper_numbers=selected_numbers,
+            write_feishu=write_feishu,
+            response_language=response_language,
+        )
+        result_docs = list(result.get("created_docs") or [])
+    except Exception as exc:
+        batch_error = str(exc)
+
+    # 3) 把批量结果回填到每篇论文对应的占位槽（优先按 report_id 匹配，其余按顺序兜底）。
+    results_by_report_id: Dict[str, Dict[str, Any]] = {}
+    leftover_results: List[Dict[str, Any]] = []
+    for result_doc in result_docs:
+        report_id = str(result_doc.get("report_id") or "").strip()
+        if report_id and report_id not in results_by_report_id:
+            results_by_report_id[report_id] = result_doc
+        else:
+            leftover_results.append(result_doc)
+
+    for index, number in enumerate(selected_numbers):
+        doc = docs[index] if index < len(docs) else {}
+        paper = doc.get("paper_raw") or doc.get("paper") or {}
+        report_path = Path(str(doc.get("report_path") or ""))
+        expected_report_id = ""
+        if index < len(created_docs_snapshot):
+            expected_report_id = str((created_docs_snapshot[index] or {}).get("report_id") or "").strip()
+
+        matched: Optional[Dict[str, Any]] = None
+        if expected_report_id and expected_report_id in results_by_report_id:
+            matched = results_by_report_id.pop(expected_report_id)
+        elif leftover_results:
+            matched = leftover_results.pop(0)
+
+        if matched:
+            completed_docs.append(matched)
             with _READING_TASK_LOCK:
-                task["completed_count"] = int(task.get("completed_count") or 0) + len(result_docs)
-                if result_docs and index < len(task.get("created_docs") or []):
-                    task["created_docs"][index] = result_docs[0]
-                task["updated_at"] = _task_timestamp()
-        except Exception as exc:
-            error = str(exc)
+                task = _READING_TASKS.get(task_id)
+                if task:
+                    task["completed_count"] = int(task.get("completed_count") or 0) + 1
+                    if index < len(task.get("created_docs") or []):
+                        task["created_docs"][index] = matched
+                    task["updated_at"] = _task_timestamp()
+        else:
+            error = batch_error or "reading report generation failed"
             errors.append(f"{paper.get('title') or number}: {error}")
-            _write_reading_placeholder(
-                user_id=user_id,
-                paper=paper,
-                report_path=report_path,
-                status="failed",
-                steps=["已创建精读报告占位文件。", _reading_language_notice(response_language), "后台精读任务执行失败。"],
-                error=error,
-                response_language=response_language,
-            )
+            if str(report_path):
+                _write_reading_placeholder(
+                    user_id=user_id,
+                    paper=paper,
+                    report_path=report_path,
+                    status="failed",
+                    steps=["已创建精读报告占位文件。", _reading_language_notice(response_language), "后台精读任务执行失败。"],
+                    error=error,
+                    response_language=response_language,
+                )
             with _READING_TASK_LOCK:
-                task["failed_count"] = int(task.get("failed_count") or 0) + 1
-                task["updated_at"] = _task_timestamp()
+                task = _READING_TASKS.get(task_id)
+                if task:
+                    task["failed_count"] = int(task.get("failed_count") or 0) + 1
+                    task["updated_at"] = _task_timestamp()
 
     with _READING_TASK_LOCK:
         task = _READING_TASKS.get(task_id)
@@ -2824,6 +2952,7 @@ def start_reading_reports_task(
     task["thread"] = thread
     with _READING_TASK_LOCK:
         _READING_TASKS[task_id] = task
+        _prune_task_registry(_READING_TASKS)
     thread.start()
     return {"task": _reading_task_payload(task), "created_docs": task["created_docs"], "count": len(docs)}
 
@@ -3654,7 +3783,7 @@ def _daily_note_graph(user_id: str, limit: int, *, scope: str = "latest", month:
                         "node_id": method_id,
                         "node_type": "method",
                         "title": method,
-                        "body": f"Daily Note method shared by one or more topics.",
+                        "body": "Daily Note method shared by one or more topics.",
                         "keywords": method,
                         "file_path": entry.get("daily_note") or "",
                         "metadata": {"source": "daily_note"},

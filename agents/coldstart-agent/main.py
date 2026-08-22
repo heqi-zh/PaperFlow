@@ -12,9 +12,11 @@ import copy
 import html
 import hashlib
 import importlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 from collections import Counter
 from datetime import datetime
@@ -578,6 +580,55 @@ def _get_env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _assert_fetchable_url(url: str) -> None:
+    """Reject URLs that point at the local host or a private network.
+
+    --homepage-url and --scholar-url are fetched server-side, so without this a
+    URL like http://127.0.0.1:8765/api/settings or a cloud metadata endpoint
+    (169.254.169.254) would be requested by PaperFlow and its response folded
+    into the profile. Only http/https are allowed, and the hostname is resolved
+    first because a public name can still map to a private address.
+
+    Set PAPERFLOW_ALLOW_PRIVATE_FETCH=1 if you host your homepage on the local
+    network and understand the implication.
+    """
+    if str(os.environ.get("PAPERFLOW_ALLOW_PRIVATE_FETCH", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return
+
+    parts = urlsplit(url)
+    if parts.scheme not in {"http", "https"}:
+        raise ValueError(f"unsupported URL scheme for fetching: {parts.scheme or '(none)'}")
+
+    hostname = parts.hostname
+    if not hostname:
+        raise ValueError("URL has no host to fetch")
+
+    try:
+        resolved = socket.getaddrinfo(hostname, parts.port or (443 if parts.scheme == "https" else 80))
+    except socket.gaierror as exc:
+        raise ValueError(f"cannot resolve host {hostname}: {exc}") from exc
+
+    for family, _type, _proto, _canonname, sockaddr in resolved:
+        if family not in (socket.AF_INET, socket.AF_INET6):
+            continue
+        try:
+            address = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if (
+            address.is_loopback
+            or address.is_private
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            raise ValueError(
+                f"refusing to fetch {hostname}: resolves to non-public address {address}. "
+                "Set PAPERFLOW_ALLOW_PRIVATE_FETCH=1 to override."
+            )
 
 
 def _collapse_whitespace(value: Any) -> str:
@@ -1157,6 +1208,7 @@ def parse_research_homepage(homepage_url: str, use_llm: bool = True) -> Dict[str
     if "://" not in candidate_url:
         candidate_url = f"https://{candidate_url.lstrip('/')}"
 
+    _assert_fetchable_url(candidate_url)
     response = requests.get(
         candidate_url,
         headers=SCHOLAR_HEADERS,
@@ -1262,6 +1314,7 @@ def _merge_scholar_page_data(base: Dict[str, Any], incoming: Dict[str, Any], pub
 
 def _fetch_google_scholar_profile_pages(scholar_url: str) -> Dict[str, Any]:
     """Fetch one or more Scholar profile pages with lightweight fallbacks."""
+    _assert_fetchable_url(scholar_url)
     timeout_seconds = max(5, _get_env_int("PAPERFLOW_SCHOLAR_TIMEOUT", SCHOLAR_TIMEOUT_SECONDS))
     publication_limit = max(1, _get_env_int("PAPERFLOW_SCHOLAR_PUBLICATION_LIMIT", SCHOLAR_PUBLICATION_LIMIT))
     page_size = max(20, _get_env_int("PAPERFLOW_SCHOLAR_PAGE_SIZE", 100))
