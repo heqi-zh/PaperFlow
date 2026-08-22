@@ -84,8 +84,16 @@ jobs:
 
     - name: Runtime files must be present in the installed package
       run: |
-        SP="$(/tmp/pf-venv/bin/python -c 'import paperflow,pathlib;print(pathlib.Path(paperflow.__file__).parent.parent)')"
+        # Resolve from /tmp, not the repo root: the checkout contains an
+        # importable `paperflow` package, and cwd precedes site-packages on
+        # sys.path, so running this here would inspect the source tree and pass
+        # regardless of what the wheel actually shipped.
+        SP="$(cd /tmp && /tmp/pf-venv/bin/python -c 'import paperflow,pathlib;print(pathlib.Path(paperflow.__file__).parent.parent)')"
         echo "site-packages: $SP"
+        case "$SP" in
+          *"site-packages") ;;
+          *) echo "Expected a site-packages path, got: $SP"; exit 1 ;;
+        esac
         for path in \
           scripts/init_db.py \
           scripts/doctor.py \
@@ -114,7 +122,15 @@ jobs:
 
     - name: Mutable state must not be written into site-packages
       run: |
-        SP="$(/tmp/pf-venv/bin/python -c 'import paperflow,pathlib;print(pathlib.Path(paperflow.__file__).parent.parent)')"
+        # Same cwd caveat as above: resolved from the repo root this returned the
+        # checkout and then flagged the repository's own committed data/.gitkeep
+        # as leaked runtime state.
+        SP="$(cd /tmp && /tmp/pf-venv/bin/python -c 'import paperflow,pathlib;print(pathlib.Path(paperflow.__file__).parent.parent)')"
+        echo "site-packages: $SP"
+        case "$SP" in
+          *"site-packages") ;;
+          *) echo "Expected a site-packages path, got: $SP"; exit 1 ;;
+        esac
         if [ -e "$SP/data" ]; then
           echo "Runtime state leaked into the install directory:"
           find "$SP/data" | head -20
