@@ -1,3 +1,5 @@
+> **自用修改版**：本仓库基于 [OpenRaiser/PaperFlow](https://github.com/OpenRaiser/PaperFlow)，增加个人使用的 ChatGPT 登录适配。参见 [根目录自用版说明](../../README.md) 和 [接入文档](../../docs/chatgpt-login.md)。下文保留上游说明与作者信息。
+
 <div align="center">
 
 # PaperFlow

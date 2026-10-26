@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import ipaddress
 import json
 import mimetypes
@@ -438,8 +439,24 @@ def _api_must_read_update(_query_params: Dict[str, Any], body: Dict[str, Any]) -
     )
 
 
+def _chatgpt_api(op, body=None):
+    from paperflow.providers.chatgpt import rpc
+    body = body or {}
+    if op == "test":
+        from paperflow.providers.chatgpt import ChatGPTLLM
+        result = ChatGPTLLM(os.environ.get("PAPERFLOW_LLM_MODEL", "auto")).generate("Reply with exactly: pong")
+        return {"ok": True, "provider": "chatgpt", "model": result.model, "response": result.text}
+    if op == "configure":
+        model = str(body.get("model") or "")
+        if model not in {item["slug"] for item in rpc("models")["models"]}:
+            raise ValueError("Choose a model returned by the current ChatGPT account.")
+        return agents.save_settings({"PAPERFLOW_LLM_PROVIDER": "chatgpt", "PAPERFLOW_LLM_MODEL": model})
+    return rpc(op, **{key: body[key] for key in ("newProfile", "id") if key in body})
+
+
 GET_ROUTES: Dict[str, ApiHandler] = {
     "/api/health": _api_health,
+    "/api/chatgpt/status": lambda q, b: _chatgpt_api("status"),
     "/api/settings": _api_settings,
     "/api/source-options": _api_source_options,
     "/api/users": _api_users,
@@ -461,6 +478,8 @@ GET_ROUTES: Dict[str, ApiHandler] = {
 }
 
 POST_ROUTES: Dict[str, ApiHandler] = {
+    **{f"/api/chatgpt/{op}": (lambda q, b, op=op: _chatgpt_api(op, b))
+       for op in ("login", "cancel", "select", "logout", "models", "configure", "test")},
     "/api/provider-test": _api_provider_test,
     "/api/settings": _api_save_settings,
     "/api/profile": _api_create_profile,
@@ -557,7 +576,18 @@ class PaperFlowGuiHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_sse_event("error", {"ok": False, "error": str(exc)})
 
+    def _allow_chatgpt_request(self) -> bool:
+        # This OAuth bridge is a local-only interface, including on --allow-remote servers.
+        host = urllib.parse.urlparse("//" + self.headers.get("Host", "")).hostname
+        origin = self.headers.get("Origin")
+        if not host or not _is_loopback_host(host) or (origin and origin != f"http://{self.headers.get('Host')}"):
+            self._send_json({"ok": False, "error": "Local same-origin account request required."}, status=403)
+            return False
+        return True
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib hook
+        if self.path.startswith("/api/chatgpt/") and not self._allow_chatgpt_request():
+            return
         path, _query_params = _query(self.path)
         if path.startswith("/api/"):
             self._handle_api(GET_ROUTES)
@@ -577,6 +607,8 @@ class PaperFlowGuiHandler(BaseHTTPRequestHandler):
         self._send_file(requested)
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib hook
+        if self.path.startswith("/api/chatgpt/") and not self._allow_chatgpt_request():
+            return
         try:
             body = _read_json(self)
         except ValueError as exc:

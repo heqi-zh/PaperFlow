@@ -1,0 +1,18 @@
+PaperFlow 自用版
+
+这是基于 OpenRaiser/PaperFlow 的个人修改版，原项目及许可证信息见 README 和 LICENSE。
+开发与安装说明见 docs/chatgpt-login.md。
+
+在仓库目录创建 .venv 并安装依赖后，双击 启动PaperFlow.command。
+主界面：http://127.0.0.1:8766
+ChatGPT 登录：http://127.0.0.1:8766/chatgpt-connect.html
+
+PaperFlow 自己完成 OAuth 授权并直接调用模型，不启动 Codex Agent。
+需要使用者自行登录；仓库不包含维护者的账号、Token 或模型配置。
+登录成功后可加载可用模型、选择模型并测试真实调用。
+本地 embedding 不需要额外 API Key，首次使用会下载模型。
+
+.env、data/、.local/ 和个人研究兴趣草稿不会提交到 Git。
+登录凭据加密存于 data/chatgpt-auth/，加密密钥由 macOS 钥匙串保存。
+请保持服务仅监听 127.0.0.1。
+自动定时运行与飞书推送需要另行配置。

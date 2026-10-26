@@ -51,6 +51,7 @@ _DEFAULT_LLM_MODEL: dict[str, str] = {
     "anthropic": "claude-haiku-4-5-20251001",
     "ollama": "qwen2.5:7b-instruct",
     "mock": "mock-llm",
+    "chatgpt": "auto",
 }
 
 _DEFAULT_EMBED_MODEL: dict[str, str] = {
@@ -72,7 +73,7 @@ def _normalize_llm_provider(raw: Optional[str]) -> str:
     value = (raw or "").strip().lower()
     if value in {"", "auto"}:
         return "openai"
-    if value in {"openai", "anthropic", "ollama", "mock"}:
+    if value in {"openai", "anthropic", "ollama", "mock", "chatgpt"}:
         return value
     return "openai"
 

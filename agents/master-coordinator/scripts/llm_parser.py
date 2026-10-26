@@ -314,6 +314,8 @@ def _get_hf_llm_client() -> Optional[Any]:
 
 def _get_llm_parser_provider() -> str:
     """Return the configured parser backend provider."""
+    if os.environ.get("PAPERFLOW_LLM_PROVIDER", "").strip().lower() == "chatgpt":
+        return "chatgpt"
     provider = os.environ.get("LLM_PARSER_PROVIDER", "auto").strip().lower()
     if provider in {"none", "disabled", "off"}:
         return "disabled"
@@ -1326,6 +1328,13 @@ def _generate_json_with_configured_llm(
     provider = _get_llm_parser_provider()
     if provider == "disabled":
         return None
+
+    if provider == "chatgpt":
+        from paperflow.providers import build_llm_provider
+        response = build_llm_provider().generate(
+            user_text, system=system_prompt + "\nReturn only one JSON object.", max_tokens=max_tokens
+        )
+        return annotate(_extract_json_object(response.text), response.provider, response.model)
 
     if provider in {"local", "auto"}:
         local_model_path = _get_local_llm_model_path()

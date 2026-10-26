@@ -1,12 +1,7 @@
 name: Deploy GUI Preview
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - "index.html"
-      - "deployments/desktop/static/**"
-      - ".github/workflows/pages.yml"
+  # Personal edition: deploy the static preview only when explicitly requested.
   workflow_dispatch:
 
 permissions:

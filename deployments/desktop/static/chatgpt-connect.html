@@ -1,0 +1,26 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PaperFlow · ChatGPT 登录</title>
+<style>body{font:16px/1.7 system-ui;background:#f5f5f2;color:#202b29;max-width:760px;margin:7vh auto;padding:24px}section{padding:30px;background:white;border-radius:18px}button,select,a.button{font:inherit;padding:9px 16px;margin:6px;border-radius:8px;border:1px solid #ccd3ce}button{cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f5f3;padding:16px}a{color:#18634c}small{color:#59605c}</style>
+<section><h1>PaperFlow × ChatGPT</h1>
+<p>用 ChatGPT 账号授权 PaperFlow 直接调用模型。研究流程由 PaperFlow 控制，不经过 Codex Agent，也不读取 Codex 的登录文件。</p>
+<button onclick="login(false)">Continue with ChatGPT</button>
+<button onclick="login(true)">添加账号</button><button onclick="action('cancel')">取消登录</button>
+<p id="loginLink"></p><pre id="state">读取连接状态…</pre>
+<label>已保存账号 <select id="profiles"></select></label><button onclick="action('select',{id:document.querySelector('#profiles').value})">切换</button>
+<button onclick="action('logout')">退出当前账号</button><p>
+<button onclick="models()">加载可用模型</button><select id="models"></select>
+<button onclick="useModel()">设为 PaperFlow 模型</button></p>
+<button onclick="action('test')">测试真实模型调用</button>
+<pre id="result">连接后先测试，再返回主界面创建研究画像。</pre>
+<p><a href="/">返回 PaperFlow</a> · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener">管理 ChatGPT 用量与授权</a></p>
+<small>模型选择以登录账号返回的目录为准。语义 embedding 独立使用本地模型。可用模型与额度以当前授权账号为准。</small></section>
+<script>
+async function api(op,args={}){const r=await fetch('/api/chatgpt/'+op,{method:op==='status'?'GET':'POST',headers:{'Content-Type':'application/json'},body:op==='status'?undefined:JSON.stringify(args)});const data=await r.json();if(!r.ok||data.ok===false)throw Error(data.error||'请求失败');return data;}
+async function status(){try{const s=await api('status');document.querySelector('#state').textContent=JSON.stringify({session:s.session,loginPending:s.loginPending,loginError:s.loginError},null,2);const link=document.querySelector('#loginLink');link.replaceChildren();if(s.loginUrl){const a=document.createElement('a');a.href=s.loginUrl;a.target='_blank';a.rel='noopener';a.textContent='打开官方登录页并授权 PaperFlow';link.append(a);}const p=document.querySelector('#profiles');const old=p.value;p.replaceChildren();for(const x of s.profiles||[]){const o=new Option(x.label+' '+(x.identity?.email||''),x.id);p.add(o);}p.value=old||s.session?.profileId||'';}catch(e){document.querySelector('#state').textContent=e.message;}}
+async function action(op,args={}){try{document.querySelector('#result').textContent='处理中…';const s=await api(op,args);document.querySelector('#result').textContent=['login','cancel','select','logout'].includes(op)?'连接状态已更新，请查看上方提示。':JSON.stringify(s,null,2);await status();}catch(e){document.querySelector('#result').textContent=e.message;}}
+async function login(newProfile){await action('login',{newProfile});}
+async function models(){try{const r=await api('models');const p=document.querySelector('#models');p.replaceChildren();for(const m of r.models)p.add(new Option(m.displayName,m.slug));}catch(e){document.querySelector('#result').textContent=e.message;}}
+async function useModel(){const model=document.querySelector('#models').value;if(!model)return;await action('configure',{model});}
+status();setInterval(status,2500);
+</script></html>

@@ -377,6 +377,10 @@ def build_llm_provider(config: Optional[ProviderConfig] = None) -> LLMProvider:
 
     cfg = config or load_provider_config()
 
+    if cfg.llm_provider == "chatgpt":
+        from .chatgpt import ChatGPTLLM
+        return ChatGPTLLM(model=cfg.llm_model)
+
     if cfg.llm_provider == "openai":
         api_key = os.environ.get("OPENAI_API_KEY", "")
         if _is_placeholder(api_key):

@@ -1,3 +1,16 @@
+## 自用版说明 / Personal edition
+
+这是基于 [OpenRaiser/PaperFlow](https://github.com/OpenRaiser/PaperFlow) 的**自用修改版**，用于个人科研论文筛选、精读和本地知识库管理，不是上游官方发行版。
+
+本版增加独立的 ChatGPT 登录与直接模型调用适配、账号连接页面及本地启动脚本。
+ChatGPT 账号由使用者自行授权；源码不包含维护者的登录凭据、API Key、研究画像或论文数据库。
+当前新增的凭据加密实现使用 macOS 钥匙串，ChatGPT 适配建议从源码运行。
+安装方法、隐私边界与本地 embedding 配置见 [ChatGPT 登录接入说明](docs/chatgpt-login.md)。
+
+原项目的作者信息、MIT 许可证和下面的上游说明予以保留。下文涵盖上游功能，不代表所有来源都已在本版逐一验证。
+
+---
+
 <div align="center">
 
 # PaperFlow

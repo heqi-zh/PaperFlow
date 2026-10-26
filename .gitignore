@@ -114,3 +114,11 @@ CLAUDE.md
 
 # Per-rater raw human-eval rows (only aggregates are public)
 experiments/human_eval/results/*/scored_rows.csv
+
+# Personal edition: local SDK, models, authentication and private research notes
+.local/
+.personal/
+研究兴趣草稿.txt
+*.local.txt
+*.pem
+*.key
