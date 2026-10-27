@@ -2014,6 +2014,7 @@ def _apply_manual_profile_updates(user_id: str, updates: Dict[str, Any]) -> None
         profile["affiliation"] = updates["affiliation"]
     if "core_directions" in updates:
         profile["core_directions"] = updates["core_directions"]
+        profile["interest_vector"] = coldstart_agent.generate_interest_vector(profile["core_directions"])
     if "topic_weights" in updates:
         profile["topic_weights"] = updates["topic_weights"]
     if "must_read" in updates:

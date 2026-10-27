@@ -23,6 +23,7 @@ DEFAULT_REQUEST_HEADERS = {"User-Agent": "PaperFlow/0.1 ArxivFetcher"}
 
 # arXiv 类别映射
 CATEGORIES = {
+    "cs.RO": "Robotics",
     "cs.AI": "Artificial Intelligence",
     "cs.LG": "Machine Learning",
     "cs.CL": "Computation and Language",

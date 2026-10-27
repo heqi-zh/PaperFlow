@@ -10,7 +10,6 @@ Bootstraps and incrementally updates a user's academic profile from:
 
 import copy
 import html
-import hashlib
 import importlib
 import ipaddress
 import json
@@ -1674,27 +1673,21 @@ def _build_taste_profile_from_methodology(methodology_preferences: Dict[str, Any
 
 
 def generate_interest_vector(core_directions: Dict[str, float]) -> List[float]:
-    """Generate a deterministic pseudo-vector from the detected directions."""
-    try:
-        target_dim = max(1, int(str(os.environ.get("EMBEDDING_DIMENSIONS", "768")).strip()))
-    except ValueError:
-        target_dim = 768
-
-    direction_str = "_".join(sorted(core_directions.keys()))
-    hash_bytes = hashlib.sha256(direction_str.encode()).digest()
-    vector = []
-
-    for index in range(target_dim):
-        byte_index = index % 32
-        sign = 1 if (hash_bytes[byte_index] & (1 << (index % 8))) else -1
-        value = sign * ((hash_bytes[byte_index] >> (index % 8)) & 1)
-        vector.append(float(value))
-
-    norm = sum(value * value for value in vector) ** 0.5
-    if norm > 0:
-        vector = [value / norm for value in vector]
-
-    return vector
+    """Embed interests in the same space used to rank paper embeddings."""
+    directions = [(name, max(0.0, float(weight))) for name, weight in sorted(core_directions.items())]
+    directions = [(name, weight) for name, weight in directions if weight > 0]
+    if not directions:
+        return []
+    embedding = importlib.import_module("skills.embedding.scripts.embed").get_embedding_service()
+    texts = [_direction_to_seed_phrase(name) for name, _ in directions]
+    vectors = embedding.embed_batch(texts)
+    dimensions = len(vectors[0])
+    if len(vectors) != len(directions) or any(len(vector) != dimensions for vector in vectors):
+        raise ValueError("Interest embeddings must have consistent dimensions")
+    combined = [sum(vector[index] * weight for vector, (_, weight) in zip(vectors, directions))
+                for index in range(dimensions)]
+    norm = sum(value * value for value in combined) ** 0.5
+    return [value / norm for value in combined] if norm else combined
 
 
 def format_profile_card(profile: Dict[str, Any], user_id: str = "user_001") -> str:
