@@ -1169,7 +1169,7 @@ def settings() -> Dict[str, Any]:
         "enable_custom_rss": _env_text("PAPERFLOW_ENABLE_CUSTOM_RSS", "false").lower() in {"1", "true", "yes", "on"},
         "arxiv_categories": _env_list("PAPERFLOW_DEFAULT_ARXIV_CATEGORIES", ["cs.RO", "cs.GR", "cs.CV", "cs.AI", "cs.LG"]),
         "conferences": _env_list("PAPERFLOW_DEFAULT_CONFERENCES", ["ICRA", "IROS", "RSS", "CoRL", "SIGGRAPH", "SIGGRAPH Asia", "CVPR", "ICCV", "ECCV"]),
-        "journals": _env_list("PAPERFLOW_DEFAULT_JOURNALS", ["RA-L", "T-RO", "IJRR", "Science Robotics", "ACM TOG", "Computer Graphics Forum", "IJCV"]),
+        "journals": _env_list("PAPERFLOW_DEFAULT_JOURNALS", ["RA-L", "T-RO", "IJRR", "Science Robotics", "ACM TOG", "TVCG", "IJCV"]),
         "custom_rss_urls": _env_list("PAPERFLOW_CUSTOM_RSS_URLS", ["https://arxiv.org/rss/cs.CL"]),
         "conference_access_mode": _env_text("PAPERFLOW_CONFERENCE_ACCESS_MODE", "public") or "public",
         "auth_status": {

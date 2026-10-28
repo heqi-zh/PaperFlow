@@ -1264,6 +1264,12 @@ def fetch_and_process_papers(
             conferences=conferences,
             limit=limit_per_source
         ) or []
+        start_day = datetime.strptime(start_date, "%Y%m%d").date()
+        # Annual TOCs cannot establish whether a paper appeared in this date range.
+        papers = [paper for paper in papers
+                  if paper.get("publish_date_precision") != "year"
+                  and _parse_iso_date(paper.get("publish_date") or paper.get("published")) is not None
+                  and _paper_date_in_window(paper, start_day, end_day)]
         for paper in papers:
             paper["source"] = "openreview"
         print(f"  Fetched {len(papers)} papers from OpenReview")
@@ -1279,7 +1285,8 @@ def fetch_and_process_papers(
         papers = journal_fetch_recent(
             journals=journals,
             days=fetch_days,
-            limit_per_journal=limit_per_source
+            limit_per_journal=limit_per_source,
+            end_date=end_day.isoformat(),
         ) or []
         for paper in papers:
             paper["source"] = "journal"

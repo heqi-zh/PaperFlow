@@ -84,18 +84,8 @@ def _response_language(payload: Dict[str, Any]) -> str:
 
 
 def _daily_days_from_body(body: Dict[str, Any]) -> int:
-    raw_days = int(body.get("days") or 1)
-    target_date = str(body.get("target_date") or "").strip()
-    if not target_date:
-        return max(1, min(14, raw_days))
-    try:
-        selected = datetime.strptime(target_date, "%Y-%m-%d").date()
-    except ValueError:
-        return max(1, min(14, raw_days))
-    today = datetime.now().date()
-    if selected > today:
-        return 1
-    return max(1, min(14, (today - selected).days + 1))
+    # The chosen date is the inclusive END of the range, independent of its width.
+    return max(1, min(14, int(body.get("days") or 1)))
 
 
 def _optional_positive_int(value: Any) -> Optional[int]:

@@ -112,12 +112,12 @@
       papers: {
         prevDay: "上一天",
         nextDay: "下一天",
-        date: "论文日期",
+        date: "截止日期",
         rangePrefix: "近",
         rangeSuffix: "天",
         daysLabel: "拉取天数",
         pullToday: "拉取新论文",
-        pullSelected: "拉取所选日期论文",
+        pullSelected: "拉取所选范围论文",
         backgroundRunning: "后台运行中",
         checkingCache: "检查当天缓存",
         candidate: "当前批次候选",
@@ -582,7 +582,7 @@
       papers: {
         prevDay: "Previous day",
         nextDay: "Next day",
-        date: "Paper date",
+        date: "End date",
         rangePrefix: "Last",
         rangeSuffix: "days",
         daysLabel: "Fetch days",
@@ -1591,12 +1591,8 @@
   }
 
   function selectedDateFetchDays() {
-    const today = dateFromInputValue(todayDateValue());
-    const selected = dateFromInputValue($("paperDate")?.value || "");
-    if (!today || !selected) return Number($("daysInput")?.value || 1);
-    if (selected > today) return 1;
-    const diffDays = Math.floor((today - selected) / 86400000) + 1;
-    return Math.min(14, Math.max(1, diffDays));
+    const days = Number($("daysInput")?.value || 7);
+    return Number.isFinite(days) ? Math.min(14, Math.max(1, Math.round(days))) : 7;
   }
 
   function syncDateControls() {
@@ -1612,7 +1608,19 @@
     const today = todayDateValue();
     if (!dateInput.value) dateInput.value = today;
     if (dateInput.value > today) dateInput.value = today;
-    daysInput.value = String(selectedDateFetchDays());
+    const days = selectedDateFetchDays();
+    daysInput.value = String(days);
+    const start = dateFromInputValue(dateInput.value);
+    if (start) {
+      start.setDate(start.getDate() - days + 1);
+      const first = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+      if ($("dateRangeHint")) $("dateRangeHint").textContent = `${first} — ${dateInput.value} · ${days} ${state.language === "en" ? "days, inclusive" : "天（含首尾）"}`;
+    }
+    document.querySelectorAll("[data-fetch-days]").forEach((button) => {
+      const selected = Number(button.dataset.fetchDays) === days;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
     runButton.disabled = false;
     runButton.textContent = dateInput.value === today ? ui().papers.pullToday : ui().papers.pullSelected;
   }
@@ -5902,6 +5910,13 @@
     $("nextDayBtn").addEventListener("click", () => shiftDate(1));
     $("paperDate").addEventListener("change", () => { syncDateControls(); persistUiPrefs(); });
     $("daysInput").addEventListener("change", () => { syncDateControls(); persistUiPrefs(); });
+    document.querySelectorAll("[data-fetch-days]").forEach((button) => {
+      button.addEventListener("click", () => {
+        $("daysInput").value = button.dataset.fetchDays;
+        syncDateControls();
+        persistUiPrefs();
+      });
+    });
     $("runDailyBtn").addEventListener("click", () => runAction(runDaily, "拉取论文"));
     $("hideTriagedToggle")?.addEventListener("click", toggleHideTriaged);
     $("shortcutHelpToggle")?.addEventListener("click", () => toggleShortcutHelp());

@@ -70,15 +70,22 @@
             <div class="paper-main">
               <div class="control-strip">
                 <button class="icon-button" type="button" id="prevDayBtn" title="上一天" aria-label="上一天">←</button>
-                <input id="paperDate" type="date" aria-label="论文日期">
+                <input id="paperDate" type="date" aria-label="截止日期" title="截止日期（含当天）">
                 <button class="icon-button" type="button" id="nextDayBtn" title="下一天" aria-label="下一天">→</button>
                 <label class="days-control">
                   <span>近</span>
-                  <input id="daysInput" type="number" min="1" max="14" value="1" aria-label="拉取天数">
+                  <input id="daysInput" type="number" min="1" max="14" value="7" aria-label="拉取天数">
                   <span>天</span>
                 </label>
+                <div class="range-presets" aria-label="快捷时间范围">
+                  <button type="button" data-fetch-days="3" aria-pressed="false">3d</button>
+                  <button type="button" data-fetch-days="7" aria-pressed="true">7d</button>
+                  <button type="button" data-fetch-days="14" aria-pressed="false">14d</button>
+                </div>
                 <button id="runDailyBtn" class="primary" type="button">拉取今日论文</button>
               </div>
+
+              <p id="dateRangeHint" class="date-range-hint" role="status" aria-live="polite"></p>
 
               <div class="metric-strip">
                 <div><span>当前批次候选</span><strong id="candidateStat">-</strong><em>篇</em></div>

@@ -120,10 +120,10 @@ def test_desktop_daily_target_date_controls_backend_fetch_window() -> None:
     server_source = (PROJECT_ROOT / "deployments/desktop/server.py").read_text(encoding="utf-8")
 
     assert server._daily_days_from_body({"days": 7}) == 7  # noqa: SLF001 - GUI date contract
-    assert server._daily_days_from_body({"target_date": today.isoformat(), "days": 9}) == 1  # noqa: SLF001
-    assert server._daily_days_from_body({"target_date": (today - timedelta(days=2)).isoformat()}) == 3  # noqa: SLF001
-    assert server._daily_days_from_body({"target_date": (today.replace(year=today.year + 1)).isoformat(), "days": 3}) == 1  # noqa: SLF001
-    assert server._daily_days_from_body({"target_date": (today.replace(year=today.year - 1)).isoformat()}) == 14  # noqa: SLF001
+    assert server._daily_days_from_body({"target_date": today.isoformat(), "days": 9}) == 9  # noqa: SLF001
+    assert server._daily_days_from_body({"target_date": (today - timedelta(days=2)).isoformat()}) == 1  # noqa: SLF001
+    assert server._daily_days_from_body({"target_date": (today.replace(year=today.year + 1)).isoformat(), "days": 3}) == 3  # noqa: SLF001
+    assert server._daily_days_from_body({"target_date": (today.replace(year=today.year - 1)).isoformat()}) == 1  # noqa: SLF001
     assert "/api/wiki/graph" in server.GET_ROUTES
     assert "daily_scope" in server_source
     assert "daily_month" in server_source

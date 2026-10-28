@@ -128,6 +128,7 @@ JOURNAL_SOURCES.update({
     "science-robotics": {"name":"Science Robotics", "kind":"crossref", "issn":"2470-9476"},
     "tog": {"name":"ACM TOG", "kind":"crossref", "issn":"0730-0301"},
     "cgf": {"name":"Computer Graphics Forum", "kind":"crossref", "issn":"1467-8659"},
+    "tvcg": {"name":"TVCG", "kind":"crossref", "issn":"1077-2626"},
 })
 
 JOURNAL_ALIASES = {
@@ -147,6 +148,8 @@ JOURNAL_ALIASES = {
 }
 
 JOURNAL_ALIASES.update({"ral":"ral", "ieeeroboticsandautomationletters":"ral", "tro":"tro", "ieeetransactionsonrobotics":"tro", "ijrr":"ijrr", "theinternationaljournalofroboticsresearch":"ijrr", "sciencerobotics":"science-robotics", "acmtog":"tog", "tog":"tog", "acmtransactionson graphics".replace(" ", ""):"tog", "computergraphicsforum":"cgf", "cgf":"cgf"})
+
+JOURNAL_ALIASES.update({"tvcg":"tvcg", "ieeetransactionsonvisualizationandcomputergraphics":"tvcg"})
 
 JOURNAL_REQUEST_TIMEOUT = float(os.environ.get("JOURNAL_REQUEST_TIMEOUT", "20"))
 JOURNAL_DETAIL_FETCH_ENABLED = os.environ.get("JOURNAL_DETAIL_FETCH_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
@@ -1116,10 +1119,22 @@ def _merge_detail_into_paper(paper: Dict[str, Any], detail: Dict[str, Any]) -> D
     return merged
 
 
+def _journal_date_window(days: int, end_date: Optional[str] = None):
+    """Inclusive calendar dates, with an independently chosen end date."""
+    if end_date:
+        text = str(end_date)
+        end = datetime.strptime(text[:10], "%Y-%m-%d") if "-" in text else datetime.strptime(text, "%Y%m%d")
+    else:
+        end = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    start = end - timedelta(days=max(1, int(days)) - 1)
+    return start, end
+
+
 def fetch_ieee_journal_papers(
     journal_key: str,
     limit: int = 20,
-    days: int = 7
+    days: int = 7,
+    end_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Fetch journal papers from IEEE Xplore when an API key is configured."""
     api_key = os.environ.get("IEEE_API_KEY", "").strip()
@@ -1128,7 +1143,7 @@ def fetch_ieee_journal_papers(
         print(f"Skipping {source['name']}: IEEE_API_KEY not configured")
         return []
 
-    cutoff_date = datetime.now() - timedelta(days=days)
+    cutoff_date, end_day = _journal_date_window(days, end_date)
     params = {
         "apikey": api_key,
         "format": "json",
@@ -1157,7 +1172,7 @@ def fetch_ieee_journal_papers(
             except ValueError:
                 continue
 
-        if published and published < cutoff_date:
+        if published and not (cutoff_date.date() <= published.date() <= end_day.date()):
             continue
 
         authors = []
@@ -1235,16 +1250,16 @@ def crossref_work_to_paper(work: Dict[str, Any], venue: str, category: str) -> O
         "categories":[category], "source":"crossref"}
 
 
-def fetch_crossref_journal_papers(journal_key: str, limit: int = 20, days: int = 7) -> List[Dict[str, Any]]:
+def fetch_crossref_journal_papers(journal_key: str, limit: int = 20, days: int = 7, end_date: Optional[str] = None) -> List[Dict[str, Any]]:
     source = JOURNAL_SOURCES[journal_key]
-    cutoff = datetime.now() - timedelta(days=days)
+    cutoff, end_day = _journal_date_window(days, end_date)
     items = query_crossref_works("https://api.crossref.org/journals/" + source["issn"] + "/works", {
-        "filter":"from-pub-date:" + cutoff.date().isoformat() + ",until-pub-date:" + datetime.now().date().isoformat(),
+        "filter":"from-pub-date:" + cutoff.date().isoformat() + ",until-pub-date:" + end_day.date().isoformat(),
         "sort":"published", "order":"desc", "rows":min(max(limit * 3, 10), 100)})
     papers = []
     for item in items:
         paper = crossref_work_to_paper(item, source["name"], journal_key)
-        if paper and cutoff.date() <= datetime.fromisoformat(paper["publish_date"]).date() <= datetime.now().date():
+        if paper and cutoff.date() <= datetime.fromisoformat(paper["publish_date"]).date() <= end_day.date():
             papers.append(paper)
         if len(papers) >= limit:
             break
@@ -1254,7 +1269,8 @@ def fetch_crossref_journal_papers(journal_key: str, limit: int = 20, days: int =
 def fetch_journal_papers(
     journal: str = "nature",
     limit: int = 20,
-    days: int = 7
+    days: int = 7,
+    end_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     抓取指定期刊的论文
@@ -1276,10 +1292,10 @@ def fetch_journal_papers(
     print(f"Fetching from {journal_info['name']}...")
 
     if journal_info.get("kind") == "crossref":
-        return fetch_crossref_journal_papers(journal_key, limit=limit, days=days)
+        return fetch_crossref_journal_papers(journal_key, limit=limit, days=days, **({"end_date": end_date} if end_date else {}))
 
     if journal_info.get("kind") == "ieee_api":
-        return fetch_ieee_journal_papers(journal_key=journal_key, limit=limit, days=days)
+        return fetch_ieee_journal_papers(journal_key=journal_key, limit=limit, days=days, **({"end_date": end_date} if end_date else {}))
 
     if not FEEDPARSER_AVAILABLE:
         print(
@@ -1292,7 +1308,7 @@ def fetch_journal_papers(
     # Entries are collected first, then their article pages are fetched
     # concurrently below.
     candidates: List[Dict[str, Any]] = []
-    cutoff_date = datetime.now() - timedelta(days=days)
+    cutoff_date, end_day = _journal_date_window(days, end_date)
 
     try:
         # 解析 RSS Feed
@@ -1310,7 +1326,7 @@ def fetch_journal_papers(
             # 提取论文信息
             published = extract_entry_datetime(entry)
 
-            if published and published < cutoff_date:
+            if published and not (cutoff_date.date() <= published.date() <= end_day.date()):
                 continue
             if published is None:
                 # RSS 没有可靠时间字段时不把旧条目伪装成“今天”
@@ -1423,7 +1439,7 @@ def fetch_by_date(
         论文列表
     """
     if journals is None:
-        journals = ["ral", "tro", "tog", "cgf", "ijcv"]
+        journals = ["ral", "tro", "tog", "tvcg", "ijcv"]
 
     try:
         start_dt = datetime.strptime(start_date, "%Y%m%d")
@@ -1445,7 +1461,8 @@ def fetch_by_date(
         papers = fetch_journal_papers(
             journal=journal,
             limit=limit_per_journal,
-            days=window_days
+            days=window_days,
+            **({"end_date": end_dt.date().isoformat()} if end_dt else {}),
         )
         all_papers.extend(papers)
 
@@ -1499,7 +1516,8 @@ def _journal_fetch_concurrency(source_count: int) -> int:
 def get_recent_papers(
     days: int = 7,
     journals: List[str] = None,
-    limit_per_journal: int = 20
+    limit_per_journal: int = 20,
+    end_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     获取最近 N 天的论文
@@ -1513,7 +1531,7 @@ def get_recent_papers(
         论文列表
     """
     if journals is None:
-        journals = ["ral", "tro", "tog", "cgf", "ijcv"]
+        journals = ["ral", "tro", "tog", "tvcg", "ijcv"]
 
     normalized_journals = []
     for journal in journals:
@@ -1534,7 +1552,7 @@ def get_recent_papers(
     if len(normalized_journals) > 1 and max_workers > 1:
         def fetch_one(journal: str) -> List[Dict[str, Any]]:
             try:
-                return fetch_journal_papers(journal=journal, limit=limit_per_journal, days=days)
+                return fetch_journal_papers(journal=journal, limit=limit_per_journal, days=days, **({"end_date": end_date} if end_date else {}))
             except Exception as exc:
                 # One unreachable feed must not abort the whole pull.
                 print(f"  Journal fetch error for {journal}: {exc}")
@@ -1548,7 +1566,8 @@ def get_recent_papers(
             papers = fetch_journal_papers(
                 journal=journal,
                 limit=limit_per_journal,
-                days=days
+                days=days,
+                **({"end_date": end_date} if end_date else {}),
             )
             all_papers.extend(papers)
 

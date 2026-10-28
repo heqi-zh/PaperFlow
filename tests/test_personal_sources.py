@@ -60,6 +60,7 @@ def test_selected_catalogs_do_not_reintroduce_biology():
     assert {'cs.RO','cs.GR','cs.CV'} <= {x['id'] for x in choices['arxiv_categories']}
     assert {'ICRA','IROS','RSS','CoRL','SIGGRAPH','SIGGRAPH Asia'} <= {x['id'] for x in choices['conferences']}
     journals={x['id'] for x in choices['journals']}
-    assert {'RA-L','T-RO','ACM TOG','Computer Graphics Forum'} <= journals
+    assert {'RA-L','T-RO','ACM TOG','TVCG'} <= journals
+    assert 'Computer Graphics Forum' not in journals
     assert not journals & {'Nature Biotechnology','Nature Methods','Cell','PNAS','Nature','Science'}
     assert not set(agents.daily_agent.load_default_journals()) & {'nature','cell','pnas','nature-biotech'}

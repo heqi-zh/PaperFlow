@@ -22,9 +22,9 @@ journals:
     source: Crossref public metadata API
     issn: 0730-0301
     enabled: true
-  - name: Computer Graphics Forum
+  - name: TVCG
     source: Crossref public metadata API
-    issn: 1467-8659
+    issn: 1077-2626
     enabled: true
   vision:
   - name: IJCV
