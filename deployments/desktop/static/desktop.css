@@ -3772,3 +3772,9 @@ body.chat-view .source-list.empty {
 .range-presets button { padding: 6px 9px; min-width: 34px; font-size: 11px; color: #738097; }
 .range-presets button.active { background: #eaf1fc; color: #285bb0; border-color: #b8cbed; }
 .date-range-hint { color: #7e8b9c; font-size: 11px; margin: -4px 0 12px; padding-left: 2px; }
+
+.push-history-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 13px 0 9px; color: #7e8b9c; font-size: 11px; }
+.push-history-bar label { font-weight: 600; color: #526780; }
+.push-history-bar select { width: 300px; max-width: 100%; font-size: 11px; padding: 7px 9px; }
+.push-history-bar button { font-size: 11px; padding: 6px 10px; }
+.push-history-bar > span { color: #8b98a8; }

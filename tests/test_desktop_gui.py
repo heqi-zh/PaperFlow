@@ -3179,6 +3179,7 @@ def test_desktop_daily_push_task_reuses_cached_target_date(monkeypatch: pytest.M
         },
     }
 
+    cached_push["metadata"]["dedup_policy"] = "handled_only_v1"
     cached_push["metadata"]["profile_fingerprint"] = agents.profile_fingerprint({})
     monkeypatch.setattr(agents.db_ops, "get_profile", lambda user_id: {})
     monkeypatch.setattr(agents.db_ops, "get_push_for_date", lambda user_id, target_date: cached_push)

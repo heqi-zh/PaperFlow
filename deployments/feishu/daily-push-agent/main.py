@@ -1052,7 +1052,7 @@ def _normalize_identity_text(value: Any) -> str:
 
 
 def get_user_handled_paper_keys(user_id: str) -> Dict[str, Set[str]]:
-    """Return all historically shown/handled identities for this user only."""
+    """Return identities with explicit handling actions; merely shown/later stay eligible."""
     conn = db_ops.get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1061,7 +1061,7 @@ def get_user_handled_paper_keys(user_id: str) -> Dict[str, Set[str]]:
         FROM behavior_logs bl
         JOIN papers p ON p.id = bl.paper_id
         WHERE bl.user_id = ?
-          AND bl.action IN ('pushed', 'selected', 'skipped', 'created_report')
+          AND bl.action IN ('selected', 'skipped', 'created_report')
         """,
         (user_id,),
     )
@@ -1086,7 +1086,7 @@ def get_user_handled_paper_keys(user_id: str) -> Dict[str, Set[str]]:
 
 
 def filter_user_handled_papers(user_id: str, papers: List[Dict]) -> tuple[List[Dict], int]:
-    """Remove previously recommended, selected, skipped or read candidates."""
+    """Remove selected, skipped or read papers; unhandled recommendations can recur."""
     handled = get_user_handled_paper_keys(user_id)
     filtered: List[Dict] = []
     dropped = 0
@@ -1855,6 +1855,7 @@ def daily_push(
         "profile_fingerprint": profile_fingerprint(profile),
         **editorial_metadata,
         "filtered_seen": seen_count,
+        "dedup_policy": "handled_only_v1",
         "filtered_scope": scope_filtered,
         "candidate_fetch_limit": candidate_limit,
         "initial_days": days,
@@ -1953,7 +1954,7 @@ def daily_push(
                 "enable_semantic_scholar": bool(enable_semantic_scholar),
                 "enable_custom_rss": bool(enable_custom_rss),
                 "custom_rss_urls": custom_rss_urls or [],
-                "reason": "no_new_matching_papers" if seen_count else "all_candidates_filtered",
+                "reason": "no_unhandled_matching_papers",
                 "fetch_days": days,
                 "days": days,
                 "target_date": target_date,

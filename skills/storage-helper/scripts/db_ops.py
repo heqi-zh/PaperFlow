@@ -182,6 +182,7 @@ def _derive_push_metadata_from_papers(papers: List[Dict[str, Any]]) -> Dict[str,
     for key in (
         "profile_fingerprint",
         "filtered_seen",
+        "dedup_policy",
         "filtered_scope",
         "filtered_editorial",
         "editorial_unavailable",
@@ -1824,7 +1825,7 @@ def get_recent_reading_signal(
     return None
 
 
-def get_push_papers(push_id: str) -> Optional[Dict]:
+def get_push_papers(push_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
     """
     Get all papers for a specific push ID
 
@@ -1841,10 +1842,10 @@ def get_push_papers(push_id: str) -> Optional[Dict]:
     cursor.execute("""
         SELECT DISTINCT push_id, timestamp
         FROM behavior_logs
-        WHERE push_id = ?
+        WHERE push_id = ? AND (? IS NULL OR user_id = ?)
         ORDER BY timestamp ASC
         LIMIT 1
-    """, (push_id,))
+    """, (push_id, user_id, user_id))
 
     row = cursor.fetchone()
     if not row:
@@ -1858,9 +1859,9 @@ def get_push_papers(push_id: str) -> Optional[Dict]:
         SELECT p.*, bl.id as behavior_log_id, bl.metadata
         FROM papers p
         JOIN behavior_logs bl ON p.id = bl.paper_id
-        WHERE bl.push_id = ? AND bl.action = 'pushed'
+        WHERE bl.push_id = ? AND bl.action = 'pushed' AND (? IS NULL OR bl.user_id = ?)
         ORDER BY bl.id ASC
-    """, (push_id,))
+    """, (push_id, user_id, user_id))
 
     papers = [_build_paper_dict(row) for row in cursor.fetchall()]
     papers.sort(key=lambda paper: (paper.get("rank", 10**9), paper.get("behavior_log_id", 10**9)))
@@ -1869,12 +1870,12 @@ def get_push_papers(push_id: str) -> Optional[Dict]:
         """
         SELECT metadata
         FROM behavior_logs
-        WHERE push_id = ?
+        WHERE push_id = ? AND (? IS NULL OR user_id = ?)
           AND action = 'push_empty'
         ORDER BY id DESC
         LIMIT 1
         """,
-        (push_id,),
+        (push_id, user_id, user_id),
     )
     metadata_row = cursor.fetchone()
     push_metadata = _load_json_metadata(metadata_row["metadata"]) if metadata_row else {}

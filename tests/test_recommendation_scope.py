@@ -30,12 +30,12 @@ def test_medical_must_read_cannot_bypass_scope_or_fallback(monkeypatch):
     assert agent.build_relaxed_fallback_scores(forbidden, profile(), {}) == []
 
 
-def test_seen_history_is_per_user_and_deduplicates_versions_doi_and_title(test_db_path, sample_paper):
+def test_handled_history_is_per_user_and_deduplicates_versions_doi_and_title(test_db_path, sample_paper):
     db = agent.db_ops
     db.DB_PATH = test_db_path
     paper = dict(sample_paper, arxiv_id="2606.12345v1", doi="10.1234/test", title="Spatial-Reconstruction: A Method")
     pid = db.add_paper(paper)
-    db.log_behavior("alice", "old", pid, "pushed", "push", "high_relevant")
+    db.log_behavior("alice", "old", pid, "skipped", "skip", "high_relevant")
     candidates = [
         {"arxiv_id": "2606.12345v2", "title": "Revised Title"},
         {"doi": "https://doi.org/10.1234/TEST", "title": "Different Title"},
@@ -98,7 +98,7 @@ def test_translation_failure_keeps_original_and_does_not_poison_cache(tmp_path):
     assert paper["translation_status"] == "complete"
 
 
-def test_daily_refresh_never_repeats_shown_papers_or_reuses_previous_nonempty_batch(test_db_path, monkeypatch):
+def test_daily_refresh_repeats_unhandled_but_excludes_explicitly_handled_papers(test_db_path, monkeypatch):
     db = agent.db_ops
     db.DB_PATH = test_db_path
     db.create_profile("refresh-test", dict(profile(), user_id="refresh-test"))
@@ -119,10 +119,15 @@ def test_daily_refresh_never_repeats_shown_papers_or_reuses_previous_nonempty_ba
     stored = db.get_push_papers(first["push_id"])
     assert stored["papers"][0]["title_zh"] == "场景重建"
     second = agent.daily_push("refresh-test", arxiv_categories=["cs.RO"], conferences=[], journals=[])
-    assert second["paper_count"] == 0
-    assert second["filtered_seen"] == 1
+    assert second["paper_count"] == 1
+    assert second["filtered_seen"] == 0
     assert first["push_id"] != second["push_id"]
     assert db.get_latest_push("refresh-test")["push_id"] == second["push_id"]
+    assert len(db.get_latest_push("refresh-test")["papers"]) == 1
+    pid = stored["papers"][0]["id"]
+    db.log_behavior("refresh-test", second["push_id"], pid, "skipped", "skip", "high_relevant")
+    third = agent.daily_push("refresh-test", arxiv_categories=["cs.RO"], conferences=[], journals=[])
+    assert third["paper_count"] == 0 and third["filtered_seen"] == 1
     assert db.get_latest_push("refresh-test")["papers"] == []
 
 

@@ -2335,10 +2335,15 @@
   function pushMetaText(push, papers, metadata = {}, options = {}) {
     if (!push?.push_id) return ui().papers.pushEmpty;
     const parts = [];
-    if (options.fromCache) parts.push(ui().papers.recentCache);
+    if (options.fromHistory) parts.push("历史推荐（保留当时结果）");
+    else if (options.fromCache) parts.push(ui().papers.recentCache);
     parts.push(`${ui().papers.batch} ${push.push_id}`);
     parts.push(push.push_time || ui().common.localTime);
     parts.push(ui().papers.recommendations(papers.length));
+    if (metadata.total_fetched !== undefined && !options.fromHistory) {
+      const handled = metadata.dedup_policy === "handled_only_v1" ? "已处理" : "按旧规则排除";
+      parts.push(`筛选：${metadata.total_fetched} 候选 → ${metadata.filtered_seen || 0} ${handled} / ${metadata.filtered_scope || 0} 范围不符 / ${metadata.filtered_editorial || 0} 贡献待核验或不符 → ${papers.length} 推荐`);
+    }
     if (metadata.daily_limit) parts.push(ui().papers.dailyLimit(metadata.daily_limit));
     if (metadata.editorial_unavailable) parts.push(`${metadata.editorial_unavailable} 篇候选待重试筛选`);
     if (metadata.limit_per_source) parts.push(ui().papers.perSourceLimit(metadata.limit_per_source));
@@ -2377,7 +2382,7 @@
     $("pushMeta").textContent = pushMetaText(push, papers, metadata, options);
     if (!papers.length) {
       $("paperList").className = "paper-list empty";
-      $("paperList").textContent = metadata.filtered_seen || metadata.filtered_scope || metadata.filtered_editorial ? `这次没有新的匹配论文。已排除 ${metadata.filtered_seen || 0} 篇已推荐论文、${metadata.filtered_scope || 0} 篇不符合研究范围的论文，${metadata.filtered_editorial || 0} 篇未通过贡献初筛。${metadata.editorial_unavailable ? "部分论文的模型筛选暂不可用，可稍后重试。" : "可扩大日期范围后再拉取。"}` : ui().papers.noRecommendations;
+      $("paperList").textContent = metadata.filtered_seen || metadata.filtered_scope || metadata.filtered_editorial ? `这次没有符合条件的未处理论文。已排除 ${metadata.filtered_seen || 0} 篇${metadata.dedup_policy === "handled_only_v1" ? "已处理" : "按旧规则排除的"}论文、${metadata.filtered_scope || 0} 篇不符合研究范围的论文，${metadata.filtered_editorial || 0} 篇未通过贡献初筛。${metadata.editorial_unavailable ? "部分论文的模型筛选暂不可用，可稍后重试。" : "可扩大日期范围后再拉取。"}` : ui().papers.noRecommendations;
       updateSelectionSummary();
       return;
     }
@@ -2437,9 +2442,29 @@
     updateSelectionSummary();
   }
 
+  async function loadPushHistory() {
+    const select = $("pushHistorySelect");
+    if (!select) return;
+    const data = await api(`/api/push-history?user_id=${encodeURIComponent(currentUser())}`);
+    const selected = select.value;
+    select.innerHTML = `<option value="">选择历史批次</option>` + (data.batches || []).map((batch) =>
+      `<option value="${escapeHtml(batch.push_id)}">${escapeHtml(batch.push_time || batch.push_id)} · ${Number(batch.paper_count || 0)} 篇</option>`
+    ).join("");
+    if (Array.from(select.options).some((option) => option.value === selected)) select.value = selected;
+  }
+
+  async function loadHistoryPush() {
+    const id = $("pushHistorySelect").value;
+    if (!id) return;
+    const data = await api(`/api/push?user_id=${encodeURIComponent(currentUser())}&push_id=${encodeURIComponent(id)}`);
+    renderPush(data.push, {fromHistory:true});
+  }
+
   async function loadLatestPush() {
     const data = await api(`/api/latest-push?user_id=${encodeURIComponent(currentUser())}`);
     renderPush(data.push || data.result?.push || data, { fromCache: true });
+    if ($("pushHistorySelect")) $("pushHistorySelect").value = "";
+    await loadPushHistory();
   }
 
   async function runDaily() {
@@ -2514,6 +2539,7 @@
       if (!task) break;
       if (task.status === "completed") {
         renderPush(task.push || { papers: [], metadata: { total_fetched: 0, paper_count: 0 } });
+        await loadPushHistory();
         await loadWiki();
         return;
       }
@@ -5878,6 +5904,8 @@
       button.addEventListener("click", () => setView(button.dataset.view));
     });
     window.addEventListener("hashchange", () => setView(window.location.hash.slice(1) || "papers", false));
+    $("pushHistorySelect")?.addEventListener("change", () => runAction(loadHistoryPush, "加载历史推荐"));
+    $("latestPushBtn")?.addEventListener("click", () => runAction(loadLatestPush, "加载最近推荐"));
     $("refreshUsersBtn").addEventListener("click", () => runAction(async () => {
       await loadUsers();
       await loadCurrentProfile();

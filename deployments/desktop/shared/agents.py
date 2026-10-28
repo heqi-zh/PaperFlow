@@ -1250,6 +1250,8 @@ def _daily_cache_matches_settings(
     sources: Dict[str, Any],
 ) -> bool:
     metadata = dict(cached_push.get("metadata") or {})
+    if metadata.get("dedup_policy") != "handled_only_v1":
+        return False
     try:
         cached_daily_limit = int(_to_float(metadata.get("daily_limit"), -1))
     except (TypeError, ValueError):
@@ -2440,6 +2442,33 @@ def get_daily_push_task(task_id: str = "", user_id: str = "") -> Dict[str, Any]:
         if task is None and str(user_id or "").strip():
             task = _DAILY_TASKS.get(_DAILY_TASK_BY_USER.get(str(user_id).strip(), ""))
         return {"task": _daily_task_payload(task) if task else None}
+
+
+def list_push_history(user_id: str, limit: int = 30) -> Dict[str, Any]:
+    """List real batches including empty attempts, scoped to the requesting user."""
+    with db_ops.connection() as conn:
+        rows = conn.execute("""
+            SELECT push_id, MAX(timestamp) AS push_time, MAX(id) AS last_id,
+                   SUM(CASE WHEN action = 'pushed' THEN 1 ELSE 0 END) AS paper_count
+            FROM behavior_logs
+            WHERE user_id = ? AND action IN ('pushed', 'push_empty')
+            GROUP BY push_id ORDER BY last_id DESC LIMIT ?
+        """, (user_id, max(1, min(100, int(limit))))).fetchall()
+    return {"batches": [dict(row) for row in rows]}
+
+
+def load_history_push(user_id: str, push_id: str) -> Dict[str, Any]:
+    # Keep original paper numbering so feedback and reading resolve the right paper.
+    with db_ops.connection() as conn:
+        owned = conn.execute("""SELECT 1 FROM behavior_logs
+            WHERE user_id = ? AND push_id = ? AND action IN ('pushed', 'push_empty') LIMIT 1""",
+            (user_id, push_id)).fetchone()
+    if not owned:
+        raise ValueError("Recommendation batch not found for this user")
+    push = db_ops.get_push_papers(push_id, user_id=user_id)
+    if push:
+        push.setdefault("metadata", {})["history_view"] = True
+    return {"push": _push_payload(push)}
 
 
 def load_latest_push(user_id: str) -> Dict[str, Any]:

@@ -453,6 +453,8 @@ GET_ROUTES: Dict[str, ApiHandler] = {
     "/api/roles": _api_roles,
     "/api/profile": _api_profile,
     "/api/latest-push": _api_latest_push,
+    "/api/push-history": lambda q, b: agents.list_push_history(_required_user(q)),
+    "/api/push": lambda q, b: agents.load_history_push(_required_user(q), str(q.get("push_id") or "")),
     "/api/daily/status": _api_daily_status,
     "/api/wiki/stats": _api_wiki_stats,
     "/api/wiki/search": _api_wiki_search,
