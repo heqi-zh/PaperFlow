@@ -386,7 +386,7 @@ def load_default_conferences() -> List[str]:
 
 
 def load_default_journals() -> List[str]:
-    """Load enabled journal sources from config, plus built-in supported journals not listed there."""
+    """Load only explicitly enabled journal sources from this edition's catalog."""
     configured = []
     unsupported = []
     raw_config = load_yaml_config("journals.yaml").get("journals", {})
@@ -405,9 +405,7 @@ def load_default_journals() -> List[str]:
         print(f"Skipping unsupported journal sources for now: {', '.join(unsupported)}")
 
     configured = dedupe_preserve_order(configured)
-    supported = journal_fetcher.get_supported_journals()
-    extras = [name for name in supported if name not in configured]
-    return configured + extras
+    return configured
 
 
 def load_scoring_weights() -> Dict:

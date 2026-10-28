@@ -2205,7 +2205,7 @@
     const defaultChecked = options.defaultChecked || "none";
     target.innerHTML = items.map((item, index) => {
       const value = item.id || item.name || item;
-      const label = item.name || item.id || item;
+      const label = item.label || item.name || item.id || item;
       const checked = defaultCheckedForSource(index, defaultChecked) ? "checked" : "";
       return `<label class="source-choice"><input type="checkbox" value="${escapeHtml(value)}" ${checked}>${escapeHtml(label)}</label>`;
     }).join("");
@@ -2252,21 +2252,21 @@
   function syncDailySourceControls(sourcePrefs = {}) {
     syncChoiceListFromSettings(
       "arxivCategories",
-      [],
+      sourcePrefs.arxiv_categories || [],
       sourcePrefs.enable_arxiv !== false,
-      { defaultChecked: "all", useConfigured: false }
+      { defaultChecked: "all" }
     );
     syncChoiceListFromSettings(
       "conferenceSources",
-      [],
+      sourcePrefs.conferences || [],
       sourcePrefs.enable_openreview !== false,
-      { defaultChecked: "none", useConfigured: false }
+      { defaultChecked: "none" }
     );
     syncChoiceListFromSettings(
       "journalSources",
-      [],
+      sourcePrefs.journals || [],
       true,
-      { defaultChecked: "none", useConfigured: false }
+      { defaultChecked: "none" }
     );
   }
 

@@ -982,6 +982,8 @@ def _configured_reading_notes_git_dir_text() -> str:
 
 
 def _env_list(name: str, default: Optional[List[str]] = None) -> List[str]:
+    if name in os.environ and not os.environ[name].strip():
+        return []
     raw = _env_text(name)
     if not raw:
         return list(default or [])
@@ -1157,9 +1159,9 @@ def settings() -> Dict[str, Any]:
         "enable_semantic_scholar": _env_text("PAPERFLOW_ENABLE_SEMANTIC_SCHOLAR", "true").lower() not in {"0", "false", "no", "off"},
         "enable_openreview": _env_text("PAPERFLOW_ENABLE_OPENREVIEW", "true").lower() not in {"0", "false", "no", "off"},
         "enable_custom_rss": _env_text("PAPERFLOW_ENABLE_CUSTOM_RSS", "false").lower() in {"1", "true", "yes", "on"},
-        "arxiv_categories": _env_list("PAPERFLOW_DEFAULT_ARXIV_CATEGORIES", ["cs.CL", "cs.AI", "cs.IR", "cs.LG"]),
-        "conferences": _env_list("PAPERFLOW_DEFAULT_CONFERENCES", ["ICLR", "NeurIPS", "ACL", "SIGIR"]),
-        "journals": _env_list("PAPERFLOW_DEFAULT_JOURNALS", []),
+        "arxiv_categories": _env_list("PAPERFLOW_DEFAULT_ARXIV_CATEGORIES", ["cs.RO", "cs.GR", "cs.CV", "cs.AI", "cs.LG"]),
+        "conferences": _env_list("PAPERFLOW_DEFAULT_CONFERENCES", ["ICRA", "IROS", "RSS", "CoRL", "SIGGRAPH", "SIGGRAPH Asia", "CVPR", "ICCV", "ECCV"]),
+        "journals": _env_list("PAPERFLOW_DEFAULT_JOURNALS", ["RA-L", "T-RO", "IJRR", "Science Robotics", "ACM TOG", "Computer Graphics Forum", "IJCV"]),
         "custom_rss_urls": _env_list("PAPERFLOW_CUSTOM_RSS_URLS", ["https://arxiv.org/rss/cs.CL"]),
         "conference_access_mode": _env_text("PAPERFLOW_CONFERENCE_ACCESS_MODE", "public") or "public",
         "auth_status": {

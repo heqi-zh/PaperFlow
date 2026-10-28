@@ -15,6 +15,10 @@ Journal Fetcher - 期刊论文抓取
 import os
 import json
 import logging
+import threading
+import time
+
+_CROSSREF_LOCK = threading.Lock()
 
 # feedparser ships in the optional [fetch] extra, so a base `pip install
 # paperflow` does not have it. Importing it unguarded made this module fail at
@@ -116,6 +120,16 @@ JOURNAL_SOURCES = {
     },
 }
 
+# Public metadata sources for the personal robotics/graphics catalog.
+JOURNAL_SOURCES.update({
+    "ral": {"name":"RA-L", "kind":"crossref", "issn":"2377-3766"},
+    "tro": {"name":"T-RO", "kind":"crossref", "issn":"1552-3098"},
+    "ijrr": {"name":"IJRR", "kind":"crossref", "issn":"0278-3649"},
+    "science-robotics": {"name":"Science Robotics", "kind":"crossref", "issn":"2470-9476"},
+    "tog": {"name":"ACM TOG", "kind":"crossref", "issn":"0730-0301"},
+    "cgf": {"name":"Computer Graphics Forum", "kind":"crossref", "issn":"1467-8659"},
+})
+
 JOURNAL_ALIASES = {
     "nature": "nature",
     "naturebiotechnology": "nature-biotech",
@@ -131,6 +145,8 @@ JOURNAL_ALIASES = {
     "ijcv": "ijcv",
     "tpami": "tpami",
 }
+
+JOURNAL_ALIASES.update({"ral":"ral", "ieeeroboticsandautomationletters":"ral", "tro":"tro", "ieeetransactionsonrobotics":"tro", "ijrr":"ijrr", "theinternationaljournalofroboticsresearch":"ijrr", "sciencerobotics":"science-robotics", "acmtog":"tog", "tog":"tog", "acmtransactionson graphics".replace(" ", ""):"tog", "computergraphicsforum":"cgf", "cgf":"cgf"})
 
 JOURNAL_REQUEST_TIMEOUT = float(os.environ.get("JOURNAL_REQUEST_TIMEOUT", "20"))
 JOURNAL_DETAIL_FETCH_ENABLED = os.environ.get("JOURNAL_DETAIL_FETCH_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
@@ -1177,6 +1193,64 @@ def extract_entry_datetime(entry) -> Optional[datetime]:
     return None
 
 
+def query_crossref_works(endpoint: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Read public Crossref metadata; limit concurrency across source fetches."""
+    with _CROSSREF_LOCK:
+        try:
+            response = requests.get(endpoint, params=params, timeout=25,
+                headers={"User-Agent":"PaperFlow/0.1 (local research metadata client)", "Accept":"application/json"})
+            response.raise_for_status()
+            return response.json().get("message", {}).get("items", [])
+        except (requests.RequestException, ValueError) as exc:
+            print(f"Crossref source unavailable: {type(exc).__name__}")
+            return []
+        finally:
+            time.sleep(1.1)
+
+
+def crossref_work_to_paper(work: Dict[str, Any], venue: str, category: str) -> Optional[Dict[str, Any]]:
+    """Normalize public metadata without claiming access to paywalled PDFs."""
+    title = _clean_html_text((work.get("title") or [""])[0])
+    if not title or any(marker in title.lower() for marker in NON_RESEARCH_TITLE_PATTERNS):
+        return None
+    published = None
+    for field in ("published-online", "published", "published-print", "issued"):
+        parts = (work.get(field) or {}).get("date-parts", [[]])[0]
+        if not parts:
+            continue
+        try:
+            published = datetime(int(parts[0]), int(parts[1]) if len(parts)>1 else 1, int(parts[2]) if len(parts)>2 else 1)
+            break
+        except (ValueError, TypeError):
+            continue
+    if not published:
+        return None
+    doi = str(work.get("DOI") or "")
+    url = work.get("URL") or ("https://doi.org/" + doi if doi else "")
+    authors = [" ".join(filter(None, (a.get("given"), a.get("family")))) for a in work.get("author", [])]
+    links = [x.get("URL", "") for x in work.get("link", []) if "pdf" in x.get("content-type", "")]
+    return {"title":title, "abstract":_clean_html_text(work.get("abstract", "")), "authors":authors,
+        "venue":venue, "journal":category, "doi":doi, "url":url, "paper_url":url,
+        "pdf_url":links[0] if links else None, "publish_date":published.isoformat(),
+        "categories":[category], "source":"crossref"}
+
+
+def fetch_crossref_journal_papers(journal_key: str, limit: int = 20, days: int = 7) -> List[Dict[str, Any]]:
+    source = JOURNAL_SOURCES[journal_key]
+    cutoff = datetime.now() - timedelta(days=days)
+    items = query_crossref_works("https://api.crossref.org/journals/" + source["issn"] + "/works", {
+        "filter":"from-pub-date:" + cutoff.date().isoformat() + ",until-pub-date:" + datetime.now().date().isoformat(),
+        "sort":"published", "order":"desc", "rows":min(max(limit * 3, 10), 100)})
+    papers = []
+    for item in items:
+        paper = crossref_work_to_paper(item, source["name"], journal_key)
+        if paper and cutoff.date() <= datetime.fromisoformat(paper["publish_date"]).date() <= datetime.now().date():
+            papers.append(paper)
+        if len(papers) >= limit:
+            break
+    return papers
+
+
 def fetch_journal_papers(
     journal: str = "nature",
     limit: int = 20,
@@ -1200,6 +1274,9 @@ def fetch_journal_papers(
         return []
 
     print(f"Fetching from {journal_info['name']}...")
+
+    if journal_info.get("kind") == "crossref":
+        return fetch_crossref_journal_papers(journal_key, limit=limit, days=days)
 
     if journal_info.get("kind") == "ieee_api":
         return fetch_ieee_journal_papers(journal_key=journal_key, limit=limit, days=days)
@@ -1346,7 +1423,7 @@ def fetch_by_date(
         论文列表
     """
     if journals is None:
-        journals = ["nature", "science", "cell"]
+        journals = ["ral", "tro", "tog", "cgf", "ijcv"]
 
     try:
         start_dt = datetime.strptime(start_date, "%Y%m%d")
@@ -1436,7 +1513,7 @@ def get_recent_papers(
         论文列表
     """
     if journals is None:
-        journals = ["nature", "science", "cell"]
+        journals = ["ral", "tro", "tog", "cgf", "ijcv"]
 
     normalized_journals = []
     for journal in journals:

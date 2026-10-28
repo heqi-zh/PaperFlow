@@ -4,6 +4,8 @@ PaperFlow 自用版
 开发与安装说明见 docs/chatgpt-login.md。
 
 在仓库目录创建 .venv 并安装依赖后，双击 启动PaperFlow.command。
+本机桌面也有指向它的快捷方式。启动后会用 Chrome 打开；请保留启动终端，按 Ctrl+C 可停止。
+没有设置开机自启。重复双击会打开已运行的工作台。
 主界面：http://127.0.0.1:8766
 ChatGPT 登录：http://127.0.0.1:8766/chatgpt-connect.html
 
@@ -16,3 +18,7 @@ PaperFlow 自己完成 OAuth 授权并直接调用模型，不启动 Codex Agent
 登录凭据加密存于 data/chatgpt-auth/，加密密钥由 macOS 钥匙串保存。
 请保持服务仅监听 127.0.0.1。
 自动定时运行与飞书推送需要另行配置。
+
+论文来源：默认关注机器人、图形学、视觉与相关 AI；生物类来源已从选择目录移除。
+新增期刊使用 Crossref 公开元数据，不代表能够读取付费全文。
+年度会议目录缺少精确发表日时标为年级日期；CoRL 从 OpenReview 读取已录用 venue。

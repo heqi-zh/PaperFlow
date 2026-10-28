@@ -3,6 +3,8 @@
 这是基于 [OpenRaiser/PaperFlow](https://github.com/OpenRaiser/PaperFlow) 的**自用修改版**，用于个人科研论文筛选、精读和本地知识库管理，不是上游官方发行版。
 
 本版增加独立的 ChatGPT 登录与直接模型调用适配、账号连接页面及本地启动脚本。
+本地可双击 `启动PaperFlow.command` 手动启动并用 Chrome 打开；请保留启动终端，按 Ctrl+C 停止。没有配置开机自启。
+默认论文来源偏向机器人、图形学和视觉，生物类来源已从界面目录移除。新增期刊抓取的是公开元数据，不保证付费全文可读。
 ChatGPT 账号由使用者自行授权；源码不包含维护者的登录凭据、API Key、研究画像或论文数据库。
 当前新增的凭据加密实现使用 macOS 钥匙串，ChatGPT 适配建议从源码运行。
 安装方法、隐私边界与本地 embedding 配置见 [ChatGPT 登录接入说明](docs/chatgpt-login.md)。

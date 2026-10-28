@@ -81,6 +81,15 @@ CONFERENCE_MAP = {
     },
 }
 
+# Annual catalogs have year-level dates, not exact publication timestamps.
+for _name, _label in {"icra": "ICRA", "iros": "IROS", "rss": "RSS", "corl": "CoRL", "siggraph": "SIGGRAPH", "siggrapha": "SIGGRAPH Asia"}.items():
+    CONFERENCE_MAP[_name] = {"name": _label, "source_type": "dblp_toc",
+        "dblp_toc_template": "db/conf/" + _name + "/" + _name + "{year}.bht", "date_precision": "year"}
+
+CONFERENCE_MAP["corl"] = {"venue_id":"robot-learning.org/CoRL", "name":"CoRL", "source_type":"openreview", "accepted_only":True}
+for _key, _query in {"icra":"International Conference on Robotics and Automation", "iros":"International Conference on Intelligent Robots and Systems", "rss":"Robotics Science and Systems", "siggraph":"SIGGRAPH Conference Papers", "siggrapha":"SIGGRAPH Asia Conference Papers"}.items():
+    CONFERENCE_MAP[_key]["crossref_query"] = _query
+
 CONFERENCE_ALIASES = {
     "iclr": "iclr",
     "icml": "icml",
@@ -94,6 +103,8 @@ CONFERENCE_ALIASES = {
     "acmmm": "acmmm",
     "acmmultimedia": "acmmm",
 }
+
+CONFERENCE_ALIASES.update({"icra":"icra", "iros":"iros", "rss":"rss", "corl":"corl", "siggraph":"siggraph", "siggraphasia":"siggrapha", "siggrapha":"siggrapha"})
 
 SUBMISSION_INVITATION_SUFFIXES = (
     "Submission",
@@ -507,6 +518,35 @@ def _looks_like_acmmm_regular_paper(paper_info: Dict[str, Any]) -> bool:
     return True
 
 
+def _search_crossref_conference_papers(conference: str, year: int, limit: int) -> List[Dict[str, Any]]:
+    import importlib
+    metadata = importlib.import_module("skills.journal-fetcher.scripts.fetch_journal")
+    info = CONFERENCE_MAP[conference]
+    query = info.get("crossref_query")
+    if not query:
+        return []
+    items = metadata.query_crossref_works("https://api.crossref.org/works", {
+        "query.container-title":f"{year} {query}", "filter":f"type:proceedings-article,from-pub-date:{year}-01-01,until-pub-date:{year}-12-31",
+        "sort":"score", "order":"desc", "rows":min(max(limit * 5, 20), 100)})
+    papers = []
+    for item in items:
+        container = " ".join(item.get("container-title", [])).lower()
+        normalized = re.sub(r"[^a-z0-9]+", " ", container)
+        required = {"icra":["robotics and automation"], "iros":["intelligent robots and systems"],
+            "rss":["robotics", "science", "systems"], "siggraph":["siggraph"], "siggrapha":["siggraph", "asia"]}[conference]
+        if not all(token in normalized for token in required):
+            continue
+        if conference == "siggraph" and "asia" in normalized:
+            continue
+        paper = metadata.crossref_work_to_paper(item, info["name"], conference)
+        if paper and datetime.fromisoformat(paper["publish_date"]).year == year:
+            paper.pop("journal", None)
+            papers.append(paper)
+        if len(papers) >= limit:
+            break
+    return papers
+
+
 def _search_dblp_toc_papers(conference: str, year: int, limit: int) -> List[Dict[str, Any]]:
     """Fetch proceedings entries from DBLP's public TOC API."""
     info = CONFERENCE_MAP[conference]
@@ -519,7 +559,7 @@ def _search_dblp_toc_papers(conference: str, year: int, limit: int) -> List[Dict
         payload = response.json()
     except Exception as e:
         print(f"DBLP proceedings error for {info['name']} {year}: {type(e).__name__}")
-        return []
+        return _search_crossref_conference_papers(conference, year, limit)
 
     hits = payload.get("result", {}).get("hits", {}).get("hit", [])
     if isinstance(hits, dict):
@@ -539,6 +579,7 @@ def _search_dblp_toc_papers(conference: str, year: int, limit: int) -> List[Dict
                 "authors": _extract_dblp_authors(paper_info.get("authors")),
                 "venue": paper_info.get("venue") or info["name"],
                 "publish_date": _approx_conference_publish_date(conference, year),
+                "publish_date_precision": info.get("date_precision", "approximate"),
                 "categories": [conference],
                 "pdf_url": paper_info.get("ee") if str(paper_info.get("ee", "")).lower().endswith(".pdf") else None,
                 "paper_url": paper_info.get("ee") or (record_url if str(record_url).startswith("http") else ""),
@@ -608,6 +649,8 @@ def _paper_in_date_range(paper: Dict[str, Any], start_date: Optional[date], end_
     except ValueError:
         return True
 
+    if paper.get("publish_date_precision") == "year":
+        return (not start_date or start_date.year <= paper_date.year) and (not end_date or paper_date.year <= end_date.year)
     if start_date and paper_date < start_date:
         return False
     if end_date and paper_date > end_date:
@@ -664,10 +707,10 @@ def search_papers(
         notes = []
         used_invitation = None
         for invitation in invitations:
-            notes = client.get_notes(
-                invitation=invitation,
-                limit=limit
-            )
+            if conference_info.get("accepted_only"):
+                notes = client.get_notes(content={"venueid": f"{conference_info['venue_id']}/{year}/Conference"}, limit=limit)
+            else:
+                notes = client.get_notes(invitation=invitation, limit=limit)
             if notes:
                 used_invitation = invitation
                 break
