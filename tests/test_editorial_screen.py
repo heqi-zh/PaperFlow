@@ -88,3 +88,15 @@ def test_rsi_is_allowed_only_with_an_independent_core_contribution(tmp_path):
     paper = {"title": "Robot reasoning", "abstract": "A new spatial representation with optional self improvement."}
     assert review_candidates([dict(paper)], preferences, provider=Editor(primary_method="rsi_loop", independent_core_contribution=False), cache_dir=tmp_path / "a")[0] == []
     assert review_candidates([dict(paper)], preferences, provider=Editor(primary_method="rsi_loop", independent_core_contribution=True), cache_dir=tmp_path / "b")[0]
+
+
+def test_loading_kept_batch_preserves_unscreened_candidate_counts(monkeypatch):
+    from deployments.desktop.shared import agents
+    push = {"push_id": "batch", "papers": [{"title": "Original", "abstract": "Source"}],
+            "metadata": {"filtered_editorial": 10, "editorial_unavailable": 1}}
+    monkeypatch.setattr(agents.db_ops, "get_latest_push", lambda user_id: push)
+    monkeypatch.setattr(agents.db_ops, "get_profile", lambda user_id: {})
+    monkeypatch.setattr(agents, "translate_papers", lambda papers: papers)
+    result = agents.load_latest_push("test")
+    assert result["push"]["metadata"]["editorial_unavailable"] == 1
+    assert result["push"]["metadata"]["filtered_editorial"] == 10

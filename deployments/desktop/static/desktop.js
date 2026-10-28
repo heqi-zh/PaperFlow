@@ -2332,6 +2332,7 @@
     parts.push(push.push_time || ui().common.localTime);
     parts.push(ui().papers.recommendations(papers.length));
     if (metadata.daily_limit) parts.push(ui().papers.dailyLimit(metadata.daily_limit));
+    if (metadata.editorial_unavailable) parts.push(`${metadata.editorial_unavailable} 篇候选待重试筛选`);
     if (metadata.limit_per_source) parts.push(ui().papers.perSourceLimit(metadata.limit_per_source));
     if (metadata.relevance_threshold !== undefined && metadata.relevance_threshold !== null && metadata.relevance_threshold !== "") {
       parts.push(ui().papers.threshold(metadata.relevance_threshold));

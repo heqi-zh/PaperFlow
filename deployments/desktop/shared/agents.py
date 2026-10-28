@@ -2454,7 +2454,9 @@ def load_latest_push(user_id: str) -> Dict[str, Any]:
                 paper["matched_interests"] = labels
                 push["papers"].append(paper)
         push["papers"], editorial_metadata = review_candidates(push["papers"], profile)
-        push.setdefault("metadata", {}).update(editorial_metadata)
+        metadata = push.setdefault("metadata", {})
+        for key, value in editorial_metadata.items():
+            metadata[key] = int(metadata.get(key) or 0) + value
         translate_papers(push["papers"])
         push.setdefault("metadata", {})["paper_count"] = len(push["papers"])
     return {"push": _push_payload(push)}
