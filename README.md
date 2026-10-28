@@ -663,3 +663,5 @@ The formal citation will be updated after the paper is published.
 PaperFlow is released under the MIT License. See [LICENSE](https://github.com/OpenRaiser/PaperFlow/blob/main/LICENSE).
 
 中文界面的精读报告统一使用中文标题、摘要、分析和关键词；保留必要的方法名、缩写及作者姓名。模型未成功生成时会提示重新生成，不将英文原文片段冒充中文精读。
+
+推荐支持在本地画像的 `editorial_preferences.selection.mode` 中启用 `browse`：重点推荐保持严格门槛，快速浏览补充有摘要证据的相关与相邻工作，明确排除项仍会过滤。每批数量由设置中的每日推荐上限控制；不会为了数量恢复不相关、已处理或模型筛选失败的论文。

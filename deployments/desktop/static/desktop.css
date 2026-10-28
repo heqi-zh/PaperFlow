@@ -3790,3 +3790,7 @@ body.chat-view .source-list.empty {
 .manual-reading-import { margin-top: 20px; border-top: 1px solid #e7ecf2; padding-top: 14px; }
 .manual-reading-import > summary { cursor: pointer; font-size: 12px; color: #8491a1; }
 .manual-reading-import .direct-read-grid { margin-top: 12px; }
+
+.paper-tier { display: inline-block; margin: 5px 0 8px; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+.paper-tier.focus { color: #447357; background: #eef6ef; }
+.paper-tier.browse { color: #65778b; background: #f0f3f7; }

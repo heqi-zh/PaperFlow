@@ -494,8 +494,9 @@ class PaperWithScore:
 
 
 def _hard_priority_tuple(paper_with_score: PaperWithScore) -> tuple:
-    """Sort must-read hits ahead of all other candidates, then by score."""
+    """Keep priority reads ahead of quick scans, then order by must-read and score."""
     return (
+        0 if (paper_with_score.paper.get("recommendation_review") or {}).get("tier") == "browse" else 1,
         1 if paper_with_score.category == "must_read" else 0,
         float(paper_with_score.score),
         float(paper_with_score.relevance_signal),
@@ -730,8 +731,8 @@ def apply_source_diversity_quota(
     if not scored_papers:
         return scored_papers
 
-    must_read_items = [paper for paper in scored_papers if paper.category == "must_read"]
-    remainder = [paper for paper in scored_papers if paper.category != "must_read"]
+    must_read_items = [paper for paper in scored_papers if paper.category == "must_read" or (paper.paper.get("recommendation_review") or {}).get("tier") == "focus"]
+    remainder = [paper for paper in scored_papers if paper not in must_read_items]
     if not remainder:
         return scored_papers
 
@@ -834,7 +835,7 @@ def apply_mmr_topic_diversity(
                 default=0.0,
             )
             mmr_score = relevance_weight * float(item.score) - diversity_weight * redundancy
-            return (mmr_score, float(item.score), float(item.relevance_signal))
+            return (_hard_priority_tuple(item)[0], mmr_score, float(item.score), float(item.relevance_signal))
 
         best = max(remaining, key=mmr_key)
         selected.append(best)
@@ -1471,7 +1472,7 @@ def sort_and_categorize(
         score = min(1.0, calculate_paper_score(paper, profile, weights) + 0.25 * priority)
         relevance_signal = min(1.0, compute_relevance_signal(paper, profile) + 0.4 * priority)
         review = paper.get("recommendation_review") or {}
-        if review.get("decision") == "keep":
+        if review.get("decision") in {"keep", "watch"}:
             score = .35 * score + .35 * review["relevance"] + .3 * review["contribution"]
             relevance_signal = review["relevance"]
         drift_bonus, drift_topics = compute_drift_bonus(paper, profile, weights)
@@ -1525,7 +1526,7 @@ def categorize_papers_by_rank(scored_papers: List[PaperWithScore], profile: Dict
     filtered: List[PaperWithScore] = []
     for paper_with_score in scored_papers:
         rank_position = rank_eligible_positions.get(id(paper_with_score))
-        must_read_hit = is_must_read(paper_with_score.paper, profile)
+        must_read_hit = is_must_read(paper_with_score.paper, profile) and (paper_with_score.paper.get("recommendation_review") or {}).get("tier") != "browse"
 
         if must_read_hit:
             paper_with_score.category = "must_read"
@@ -1812,6 +1813,8 @@ def daily_push(
     candidate_limit = limit_per_source
     if profile.get("recommendation_scope", {}).get("focus_groups"):
         candidate_limit = max(limit_per_source, min(300, limit_per_source * 10))
+        if (profile.get("editorial_preferences", {}).get("selection") or {}).get("mode") == "browse":
+            candidate_limit = max(candidate_limit, 200)
 
     # Raw source previews are unfiltered candidates, not recommendations.
     # With an explicit research scope, show only the ranked, filtered preview.
@@ -1919,6 +1922,9 @@ def daily_push(
         if fallback_scored:
             papers = fallback_papers
             scored_papers = fallback_scored
+
+    fallback_metadata["recommended_focus"] = sum((p.paper.get("recommendation_review") or {}).get("tier") == "focus" for p in scored_papers)
+    fallback_metadata["recommended_browse"] = sum((p.paper.get("recommendation_review") or {}).get("tier") == "browse" for p in scored_papers)
 
     # Translate only final recommendations, then persist alongside original metadata.
     if callable(progress_callback):

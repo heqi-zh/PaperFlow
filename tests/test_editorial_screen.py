@@ -100,3 +100,52 @@ def test_loading_kept_batch_preserves_unscreened_candidate_counts(monkeypatch):
     result = agents.load_latest_push("test")
     assert result["push"]["metadata"]["editorial_unavailable"] == 1
     assert result["push"]["metadata"]["filtered_editorial"] == 10
+
+
+def browse_profile():
+    return {"editorial_preferences": {"selection": {"mode": "browse"}, "gates": {
+        "navigation_mode": "agentic", "skip_primary_methods": ["rl_policy", "rsi_loop"],
+    }}}
+
+
+def test_browse_mode_includes_relevant_watch_without_claiming_priority(tmp_path):
+    paper = {"title": "A related surface method", "abstract": "An incremental surface reconstruction method."}
+    kept, meta = review_candidates([paper], browse_profile(), provider=Editor(
+        decision="watch", relevance=.65, contribution=.4), cache_dir=tmp_path)
+    assert kept == [paper] and meta["filtered_editorial"] == 0
+    assert paper["recommendation_review"]["decision"] == "watch"
+    assert paper["recommendation_review"]["tier"] == "browse"
+
+
+def test_browse_mode_preserves_exclusions_missing_evidence_and_selective_floor(tmp_path):
+    paper = {"title": "Spatial planning", "abstract": "A spatial memory navigation policy."}
+    for index, changes in enumerate([
+        dict(decision="skip"), dict(decision="watch", evidence=""),
+        dict(decision="watch", relevance=.3), dict(decision="watch", contribution=.1),
+        dict(decision="watch", track="selective", contribution=.3),
+        dict(decision="watch", navigation_mode="policy", primary_method="rl_policy"),
+        dict(decision="watch", navigation_mode="unknown"),
+    ]):
+        assert review_candidates([dict(paper)], browse_profile(), provider=Editor(**changes), cache_dir=tmp_path / str(index))[0] == []
+
+
+def test_ranked_priority_reads_stay_ahead_of_quick_scans_before_count_limit():
+    import importlib
+    agent = importlib.import_module("deployments.feishu.daily-push-agent.main")
+    focus = agent.PaperWithScore(paper={"recommendation_review": {"tier": "focus"}}, score=.6, category="high_relevant", relevance_signal=.8)
+    scan = agent.PaperWithScore(paper={"recommendation_review": {"tier": "browse"}}, score=.99, category="high_relevant", relevance_signal=.9)
+    ranked = sorted([scan, focus], key=agent._hard_priority_tuple, reverse=True)
+    assert ranked == [focus, scan]
+    assert agent.apply_push_count_limit(ranked, {"push_target_count": 1, "push_max_count": 1}) == [focus]
+
+
+def test_diversity_cannot_drop_priority_reads_in_favor_of_quick_scans():
+    import importlib
+    agent = importlib.import_module("deployments.feishu.daily-push-agent.main")
+    focus = agent.PaperWithScore(paper={"title": "Core", "source": "arxiv", "recommendation_review": {"tier": "focus"}}, score=.6, category="high_relevant", relevance_signal=.8)
+    scans = [agent.PaperWithScore(paper={"title": str(i), "source": "journal", "recommendation_review": {"tier": "browse"}}, score=.99, category="maybe_interested", relevance_signal=.7) for i in range(12)]
+    ranked = agent.apply_source_diversity_quota([focus] + scans, {"source_diversity_min_total": 2, "source_diversity_max_share": .5})
+    assert focus in ranked
+    ranked = agent.apply_mmr_topic_diversity(ranked, {"mmr_min_total": 2})
+    assert ranked[0] is focus
+    assert agent.apply_push_count_limit(ranked, {"push_target_count": 1}) == [focus]

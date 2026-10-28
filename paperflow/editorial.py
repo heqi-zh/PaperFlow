@@ -11,7 +11,7 @@ from paperflow.runtime import data_dir
 
 
 def _key(paper, profile):
-    payload = ["editorial-v1", profile_fingerprint(profile), paper.get("title"), paper.get("abstract")]
+    payload = ["editorial-v2", profile_fingerprint(profile), paper.get("title"), paper.get("abstract")]
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -59,8 +59,23 @@ def _validate(item, paper, preferences=None):
             "independent_core_contribution": independent}
 
 
+def _browse_eligible(paper, preferences):
+    review = paper["recommendation_review"]
+    selection = preferences.get("selection") or {}
+    if selection.get("mode") != "browse" or review.get("decision") != "watch":
+        return False
+    if not str(paper.get("abstract") or "").strip() or not review.get("evidence"):
+        return False
+    gates = preferences.get("gates") or {}
+    if gates.get("navigation_mode") == "agentic" and review.get("navigation_mode") not in {"agentic", "not_navigation"}:
+        return False
+    contribution_min = selection.get("selective_min_contribution", .45) if review.get("track") == "selective" else selection.get("min_contribution", .25)
+    return (review.get("relevance", 0) >= float(selection.get("min_relevance", .55))
+            and review.get("contribution", 0) >= float(contribution_min))
+
+
 def review_candidates(papers, profile, *, provider=None, cache_dir=None):
-    """Return only supported keeps; uncertainty/failure never bypasses the filter.
+    """Return supported keeps and, when requested, relevant quick-scan candidates.
 
     Scores describe an abstract-level screen, not verified scientific impact.
     Profiles without editorial preferences retain their existing behavior.
@@ -77,6 +92,7 @@ def review_candidates(papers, profile, *, provider=None, cache_dir=None):
             paper["recommendation_review"] = _validate(item, paper, preferences)
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             pending.append((key, paper))
+    browse = (preferences.get("selection") or {}).get("mode") == "browse"
     for offset in range(0, len(pending), 8):
         batch = pending[offset:offset + 8]
         try:
@@ -91,8 +107,13 @@ def review_candidates(papers, profile, *, provider=None, cache_dir=None):
                 "For core papers require direct relevance and substantive technical contribution. "
                 "For selective areas require unusually concrete, consequential method/capability/evaluation contributions; "
                 "SOTA claims, a new acronym, tiny gains, and stacking modules alone do not qualify. "
-                "Without enough evidence choose watch; unrelated/routine/disfavored primary topics choose skip. "
-                "An auxiliary disfavored technique does not disqualify a strong core contribution. "
+                "Use keep for priority reading. Use watch for relevant but less certain contributions. "
+                "Use skip for irrelevant or explicitly excluded primary topics. "
+                + ("The reader wants a broad quick-scan list in addition to priority reads: ordinary but relevant "
+                   "technical work, incremental contributions and adjacent spatial/embodied work may be watch. "
+                   "A watch is NOT a claim of breakthrough or a recommendation for deep reading. " if browse else
+                   "Routine contributions in selective areas should be skipped under the reader preferences. ")
+                + "An auxiliary disfavored technique does not disqualify a strong core contribution. "
                 "Return ONLY a JSON array, one object per id: id, decision (keep/watch/skip), "
                 "track (core/selective), relevance (0..1), contribution (0..1), reason_zh "
                 "(one concise Chinese sentence describing the concrete contribution or mismatch), "
@@ -128,6 +149,12 @@ def review_candidates(papers, profile, *, provider=None, cache_dir=None):
             print(f"Editorial screen unavailable: {type(exc).__name__}")
             for _, paper in batch:
                 paper["recommendation_review"] = {"decision": "unavailable"}
-    selected = [p for p in papers if p["recommendation_review"]["decision"] == "keep"]
+    selected = []
+    for paper in papers:
+        review = paper["recommendation_review"]
+        if review["decision"] == "keep" or _browse_eligible(paper, preferences):
+            review["tier"] = "focus" if review["decision"] == "keep" else "browse"
+            selected.append(paper)
+    selected.sort(key=lambda p: p["recommendation_review"]["tier"] != "focus")
     unavailable = sum(p["recommendation_review"]["decision"] == "unavailable" for p in papers)
     return selected, {"filtered_editorial": len(papers) - len(selected), "editorial_unavailable": unavailable}

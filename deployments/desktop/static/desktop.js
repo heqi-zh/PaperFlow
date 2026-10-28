@@ -2401,7 +2401,9 @@
     $("filteredStat").textContent = metadata.paper_count ?? metadata.filtered_count ?? metadata.ranked_count ?? papers.length ?? 0;
     $("latestPushStat").textContent = papers.length || "-";
     $("readingQueueStat").textContent = "0";
-    $("pushMeta").textContent = pushMetaText(push, papers, metadata, options);
+    const tierSummary = papers.some(p => p.recommendation_review?.tier)
+      ? ` · 重点推荐 ${papers.filter(p => p.recommendation_review?.tier === "focus").length} · 快速浏览 ${papers.filter(p => p.recommendation_review?.tier === "browse").length}` : "";
+    $("pushMeta").textContent = pushMetaText(push, papers, metadata, options) + tierSummary;
     if (!papers.length) {
       $("paperList").className = "paper-list empty";
       $("paperList").textContent = metadata.filtered_seen || metadata.filtered_scope || metadata.filtered_editorial ? `这次没有符合条件的未处理论文。已排除 ${metadata.filtered_seen || 0} 篇${metadata.dedup_policy === "handled_only_v1" ? "已处理" : "按旧规则排除的"}论文、${metadata.filtered_scope || 0} 篇不符合研究范围的论文，${metadata.filtered_editorial || 0} 篇未通过贡献初筛。${metadata.editorial_unavailable ? "部分论文的模型筛选暂不可用，可稍后重试。" : "可扩大日期范围后再拉取。"}` : ui().papers.noRecommendations;
@@ -2422,6 +2424,7 @@
       const translatedTitle = paper.title_zh ? `<p class="paper-title-translation" lang="zh-CN">${escapeHtml(paper.title_zh)}</p>` : "";
       const abstract = paper.abstract || paper.summary || "";
       const review = paper.recommendation_review || {};
+      const tierLabel = review.tier === "browse" ? "快速浏览" : review.tier === "focus" ? "重点推荐" : "";
       const externalIcon = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M11 3h6v6M17 3l-9 9"/><path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3"/></svg>`;
       const pdfIcon = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 2h7l4 4v12H5z"/><path d="M12 2v5h4M8 11h5M8 14h5"/></svg>`;
       // Each action button names its paper so a screen reader announces
@@ -2433,6 +2436,7 @@
           <div class="paper-content">
             <h3>${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>` : escapeHtml(title)}</h3>
             ${translatedTitle}
+            ${tierLabel ? `<span class="paper-tier ${review.tier === "browse" ? "browse" : "focus"}">${tierLabel}</span>` : ""}
             <div class="paper-source-links">
               ${sourceUrl ? `<a class="paper-resource" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${externalIcon}<span>Paper</span></a>` : ""}
               ${pdfUrl ? `<a class="paper-resource" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noopener noreferrer">${pdfIcon}<span>PDF</span></a>` : ""}
@@ -2444,7 +2448,7 @@
               <p class="paper-abstract-full" lang="en">${escapeHtml(abstract || "The source has not provided an abstract.")}</p>
             </details>
             ${paper.abstract_zh ? `<details class="paper-abstract-details paper-translation"><summary>中文译文 <span>展开阅读</span></summary><p class="paper-abstract-full" lang="zh-CN">${escapeHtml(paper.abstract_zh)}</p></details>` : ""}
-            ${review.reason_zh ? `<div class="paper-editor-note"><span class="paper-editor-label">推荐依据 · 摘要初筛</span><p>${escapeHtml(review.reason_zh)}</p><small>贡献判断待全文与实验核验</small></div>` : ""}
+            ${review.reason_zh ? `<div class="paper-editor-note"><span class="paper-editor-label">${review.tier === "browse" ? "速览依据 · 摘要初筛" : "推荐依据 · 摘要初筛"}</span><p>${escapeHtml(review.reason_zh)}</p><small>贡献判断待全文与实验核验</small></div>` : ""}
             <div class="paper-tags">
               ${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
             </div>
