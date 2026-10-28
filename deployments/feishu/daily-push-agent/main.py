@@ -35,6 +35,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import importlib
 
 from paperflow import env as shared_env
+from paperflow.recommendations import scope_match, profile_fingerprint
+from paperflow.translations import translate_papers
+from paperflow.editorial import review_candidates
+from uuid import uuid4
 
 # 导入多个数据源
 arxiv_fetcher = importlib.import_module("skills.arxiv-fetcher.scripts.fetch_arxiv")
@@ -1042,15 +1046,13 @@ def _normalize_arxiv_key(value: Any) -> str:
 
 
 def _normalize_identity_text(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+    text = str(value or "").casefold().strip()
+    text = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", text)
+    return re.sub(r"[\W_]+", " ", text).strip()
 
 
 def get_user_handled_paper_keys(user_id: str) -> Dict[str, Set[str]]:
-    """Return paper identities this user has already acted on.
-
-    The fallback pool should avoid papers the user explicitly selected,
-    skipped, or already generated a reading report for.
-    """
+    """Return all historically shown/handled identities for this user only."""
     conn = db_ops.get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -1059,7 +1061,7 @@ def get_user_handled_paper_keys(user_id: str) -> Dict[str, Set[str]]:
         FROM behavior_logs bl
         JOIN papers p ON p.id = bl.paper_id
         WHERE bl.user_id = ?
-          AND bl.action IN ('selected', 'skipped', 'created_report')
+          AND bl.action IN ('pushed', 'selected', 'skipped', 'created_report')
         """,
         (user_id,),
     )
@@ -1084,7 +1086,7 @@ def get_user_handled_paper_keys(user_id: str) -> Dict[str, Set[str]]:
 
 
 def filter_user_handled_papers(user_id: str, papers: List[Dict]) -> tuple[List[Dict], int]:
-    """Remove fallback candidates already selected/skipped/read by the user."""
+    """Remove previously recommended, selected, skipped or read candidates."""
     handled = get_user_handled_paper_keys(user_id)
     filtered: List[Dict] = []
     dropped = 0
@@ -1118,6 +1120,8 @@ def build_relaxed_fallback_scores(
     """Return the closest weak matches when strict categorization yields no push."""
     candidates: List[PaperWithScore] = []
     for paper in papers:
+        if not scope_match(paper, profile)[0]:
+            continue
         score = calculate_paper_score(paper, profile, weights)
         relevance_signal = compute_relevance_signal(paper, profile)
         drift_bonus, drift_topics = compute_drift_bonus(paper, profile, weights)
@@ -1404,13 +1408,20 @@ def fetch_and_process_papers(
             except Exception as e:
                 print(f"  OpenReview fallback fetch error: {e}")
 
-    # 去重（基于标题）
-    seen_titles = set()
+    # Deduplicate across sources and arXiv revisions using stable identities.
     unique_papers = []
+    seen_ids = set()
     for paper in all_papers:
-        title = paper.get("title", "")
-        if title and title not in seen_titles:
-            seen_titles.add(title)
+        identities = set()
+        if paper.get("arxiv_id"):
+            identities.add(("arxiv", _normalize_arxiv_key(paper["arxiv_id"])))
+        if paper.get("doi"):
+            identities.add(("doi", _normalize_identity_text(paper["doi"])))
+        title = _normalize_identity_text(paper.get("title"))
+        if title:
+            identities.add(("title", title))
+        if identities and not identities.intersection(seen_ids):
+            seen_ids.update(identities)
             unique_papers.append(paper)
 
     print(f"Total unique papers after deduplication: {len(unique_papers)}")
@@ -1446,8 +1457,16 @@ def sort_and_categorize(
 
     result = []
     for paper in papers:
-        score = calculate_paper_score(paper, profile, weights)
-        relevance_signal = compute_relevance_signal(paper, profile)
+        allowed, labels, priority = scope_match(paper, profile)
+        if not allowed:
+            continue
+        paper["matched_interests"] = labels
+        score = min(1.0, calculate_paper_score(paper, profile, weights) + 0.25 * priority)
+        relevance_signal = min(1.0, compute_relevance_signal(paper, profile) + 0.4 * priority)
+        review = paper.get("recommendation_review") or {}
+        if review.get("decision") == "keep":
+            score = .35 * score + .35 * review["relevance"] + .3 * review["contribution"]
+            relevance_signal = review["relevance"]
         drift_bonus, drift_topics = compute_drift_bonus(paper, profile, weights)
         reading_signal_bonus, reading_signal_topics = compute_reading_signal_bonus(paper, profile, weights)
         score = min(1.0, score + drift_bonus + reading_signal_bonus)
@@ -1782,6 +1801,20 @@ def daily_push(
         weights["push_max_count"] = resolved_push_limit
         weights["paperflow_daily_limit"] = resolved_push_limit
 
+    # Candidate discovery must be wider than the final display count.
+    candidate_limit = limit_per_source
+    if profile.get("recommendation_scope", {}).get("focus_groups"):
+        candidate_limit = max(limit_per_source, min(300, limit_per_source * 10))
+
+    # Raw source previews are unfiltered candidates, not recommendations.
+    # With an explicit research scope, show only the ranked, filtered preview.
+    if callable(progress_callback) and profile.get("recommendation_scope"):
+        original_callback = progress_callback
+        def scoped_callback(event):
+            if event.get("phase") != "fetched":
+                original_callback(event)
+        progress_callback = scoped_callback
+
     # 3. 从多个数据源抓取论文
     papers = fetch_and_process_papers(
         days=days,
@@ -1792,23 +1825,33 @@ def daily_push(
         custom_rss_urls=custom_rss_urls,
         enable_semantic_scholar=bool(enable_semantic_scholar),
         enable_custom_rss=bool(enable_custom_rss),
-        limit_per_source=limit_per_source,
+        limit_per_source=candidate_limit,
         target_date=target_date,
         progress_callback=progress_callback,
     )
     print(f"Fetched {len(papers)} papers from all sources")
 
-    if not papers:
-        print("No papers fetched, skipping push")
-        return
+    total_fetched = len(papers)
+    papers, seen_count = filter_user_handled_papers(user_id, papers)
+    before_scope = len(papers)
+    papers = [p for p in papers if scope_match(p, profile)[0]]
+    scope_filtered = before_scope - len(papers)
+    if callable(progress_callback):
+        progress_callback({"phase": "screening", "count": len(papers)})
+    papers, editorial_metadata = review_candidates(papers, profile)
 
     # 4. 排序并分类
     print("Sorting and categorizing papers...")
     scored_papers = sort_and_categorize(papers, profile, weights, progress_callback=progress_callback)
     fallback_metadata: Dict[str, Any] = {
         "fallback_used": False,
+        "profile_fingerprint": profile_fingerprint(profile),
+        **editorial_metadata,
+        "filtered_seen": seen_count,
+        "filtered_scope": scope_filtered,
+        "candidate_fetch_limit": candidate_limit,
         "initial_days": days,
-        "initial_total_fetched": len(papers),
+        "initial_total_fetched": total_fetched,
     }
 
     fallback_days = max(EMPTY_PUSH_FALLBACK_DAYS, int(days or 1))
@@ -1833,6 +1876,8 @@ def daily_push(
         )
         fallback_total_fetched = len(fallback_papers)
         fallback_papers, fallback_dropped = filter_user_handled_papers(user_id, fallback_papers)
+        fallback_papers = [p for p in fallback_papers if scope_match(p, profile)[0]]
+        fallback_papers, _ = review_candidates(fallback_papers, profile)
         print(
             f"Fallback pool: fetched {fallback_total_fetched}, "
             f"dropped {fallback_dropped} already handled, kept {len(fallback_papers)}"
@@ -1867,10 +1912,15 @@ def daily_push(
             papers = fallback_papers
             scored_papers = fallback_scored
 
+    # Translate only final recommendations, then persist alongside original metadata.
+    if callable(progress_callback):
+        progress_callback({"phase": "translating", "count": len(scored_papers)})
+    translate_papers([item.paper for item in scored_papers])
+
     # 5. 生成推送卡片
     date_str = datetime.now().strftime("%m-%d")
-    push_id = f"push_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    push_card = format_push_card(scored_papers, profile, date_str, total_fetched=len(papers))
+    push_id = f"push_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+    push_card = format_push_card(scored_papers, profile, date_str, total_fetched=total_fetched)
 
     # 6. 保存推送记录到数据库
     print(f"Saving push record: {push_id}")
@@ -1884,7 +1934,7 @@ def daily_push(
             category="empty_push",
             metadata={
                 "paper_count": 0,
-                "total_fetched": len(papers),
+                "total_fetched": total_fetched,
                 "daily_limit": weights.get("paperflow_daily_limit"),
                 "push_target_count": weights.get("push_target_count"),
                 "push_max_count": weights.get("push_max_count"),
@@ -1896,7 +1946,8 @@ def daily_push(
                 "enable_semantic_scholar": bool(enable_semantic_scholar),
                 "enable_custom_rss": bool(enable_custom_rss),
                 "custom_rss_urls": custom_rss_urls or [],
-                "reason": "all_candidates_filtered",
+                "reason": "no_new_matching_papers" if seen_count else "all_candidates_filtered",
+                "fetch_days": days,
                 "days": days,
                 "target_date": target_date,
                 "push_context": "daily_push",
@@ -1947,12 +1998,18 @@ def daily_push(
         if paper_id:
             try:
                 push_metadata = {
+                    **fallback_metadata,
+                    "title_zh": paper.get("title_zh", ""),
+                    "abstract_zh": paper.get("abstract_zh", ""),
+                    "translation_status": paper.get("translation_status", "unavailable"),
+                    "matched_interests": paper.get("matched_interests", []),
+                    "recommendation_review": paper.get("recommendation_review", {}),
                     "score": p.score,
                     "category": p.category,
                     "relevance_signal": p.relevance_signal,
                     "rank": i + 1,
                     "paper_count": len(scored_papers),
-                    "total_fetched": len(papers),
+                    "total_fetched": total_fetched,
                     "daily_limit": weights.get("paperflow_daily_limit"),
                     "push_target_count": weights.get("push_target_count"),
                     "push_max_count": weights.get("push_max_count"),
@@ -2058,7 +2115,7 @@ def daily_push(
         "success": True,
         "push_id": push_id,
         "paper_count": len(scored_papers),
-        "total_fetched": len(papers),
+        "total_fetched": total_fetched,
         "limit_per_source": limit_per_source,
         "fetch_days": days,
         "target_date": target_date,

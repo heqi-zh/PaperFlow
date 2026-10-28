@@ -180,6 +180,13 @@ def _derive_push_metadata_from_papers(papers: List[Dict[str, Any]]) -> Dict[str,
     metadata = papers[0].get("metadata") or {}
     push_metadata: Dict[str, Any] = {}
     for key in (
+        "profile_fingerprint",
+        "filtered_seen",
+        "filtered_scope",
+        "filtered_editorial",
+        "editorial_unavailable",
+        "candidate_fetch_limit",
+        "target_date",
         "fallback_used",
         "fallback_days",
         "fallback_total_fetched",
@@ -1361,12 +1368,12 @@ def get_latest_push(user_id: str) -> Optional[Dict]:
 
     # Get the latest real push_id from behavior logs
     cursor.execute("""
-        SELECT push_id, MAX(timestamp) as timestamp
+        SELECT push_id, MAX(timestamp) as timestamp, MAX(id) as last_event_id
         FROM behavior_logs
         WHERE user_id = ?
           AND action IN ('pushed', 'push_empty')
         GROUP BY push_id
-        ORDER BY timestamp DESC, push_id DESC
+        ORDER BY timestamp DESC, last_event_id DESC
         LIMIT 1
     """, (user_id,))
 
@@ -1432,13 +1439,13 @@ def get_push_for_date(user_id: str, target_date: str) -> Optional[Dict]:
 
     cursor.execute(
         """
-        SELECT push_id, MAX(timestamp) as timestamp
+        SELECT push_id, MAX(timestamp) as timestamp, MAX(id) as last_event_id
         FROM behavior_logs
         WHERE user_id = ?
           AND action IN ('pushed', 'push_empty')
           AND date(timestamp) = ?
         GROUP BY push_id
-        ORDER BY timestamp DESC, push_id DESC
+        ORDER BY timestamp DESC, last_event_id DESC
         LIMIT 1
         """,
         (user_id, target_date),

@@ -116,7 +116,7 @@
         rangePrefix: "近",
         rangeSuffix: "天",
         daysLabel: "拉取天数",
-        pullToday: "拉取今日论文",
+        pullToday: "拉取新论文",
         pullSelected: "拉取所选日期论文",
         backgroundRunning: "后台运行中",
         checkingCache: "检查当天缓存",
@@ -2347,6 +2347,13 @@
     return parts.join(" · ");
   }
 
+  function safePaperUrl(value) {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+    } catch { return ""; }
+  }
+
   function renderPush(push, options = {}) {
     state.push = push;
     state.selected.clear();
@@ -2361,7 +2368,7 @@
     $("pushMeta").textContent = pushMetaText(push, papers, metadata, options);
     if (!papers.length) {
       $("paperList").className = "paper-list empty";
-      $("paperList").textContent = ui().papers.noRecommendations;
+      $("paperList").textContent = metadata.filtered_seen || metadata.filtered_scope || metadata.filtered_editorial ? `这次没有新的匹配论文。已排除 ${metadata.filtered_seen || 0} 篇已推荐论文、${metadata.filtered_scope || 0} 篇不符合研究范围的论文，${metadata.filtered_editorial || 0} 篇未通过贡献初筛。${metadata.editorial_unavailable ? "部分论文的模型筛选暂不可用，可稍后重试。" : "可扩大日期范围后再拉取。"}` : ui().papers.noRecommendations;
       updateSelectionSummary();
       return;
     }
@@ -2374,16 +2381,34 @@
       const score = normalizeScore(paper.score ?? paper.relevance ?? paper.relevance_score ?? 80);
       const tags = paperDisplayTags(paper);
       const title = paper.title || "Untitled Paper";
+      const sourceUrl = safePaperUrl(paper.url || paper.paper_url);
+      const pdfUrl = safePaperUrl(paper.pdf_url);
+      const translatedTitle = paper.title_zh ? `<p class="paper-title-translation" lang="zh-CN">${escapeHtml(paper.title_zh)}</p>` : "";
+      const abstract = paper.abstract || paper.summary || "";
+      const review = paper.recommendation_review || {};
+      const externalIcon = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M11 3h6v6M17 3l-9 9"/><path d="M8 4H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-3"/></svg>`;
+      const pdfIcon = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M5 2h7l4 4v12H5z"/><path d="M12 2v5h4M8 11h5M8 14h5"/></svg>`;
       // Each action button names its paper so a screen reader announces
       // "not interested, <title>" instead of three bare verbs per card.
       const actionLabel = (verb) => escapeHtml(`${verb} — ${title}`);
       return `
         <article class="paper-card" role="listitem" tabindex="-1" data-paper-number="${number}" aria-label="${escapeHtml(`#${number} ${title}`)}">
-          <div class="score-ring" style="--score: ${Math.min(score, 100)}%">${score}%</div>
+          <div class="paper-score" title="推荐匹配评分，不代表论文质量的确定结论"><strong>${score}</strong><span>匹配分</span></div>
           <div class="paper-content">
-            <h3>${escapeHtml(title)}</h3>
+            <h3>${sourceUrl ? `<a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>` : escapeHtml(title)}</h3>
+            ${translatedTitle}
+            <div class="paper-source-links">
+              ${sourceUrl ? `<a class="paper-resource" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer">${externalIcon}<span>Paper</span></a>` : ""}
+              ${pdfUrl ? `<a class="paper-resource" href="${escapeHtml(pdfUrl)}" target="_blank" rel="noopener noreferrer">${pdfIcon}<span>PDF</span></a>` : ""}
+              <span class="paper-focus-label">${escapeHtml((paper.matched_interests || []).join(" · "))}</span>
+            </div>
             <p class="paper-authors">${escapeHtml(Array.isArray(paper.authors) ? paper.authors.join(", ") : (paper.authors || paper.author || ui().papers.authorPending))}</p>
-            <p class="paper-abstract">${escapeHtml(paper.abstract || paper.summary || "")}</p>
+            <details class="paper-abstract-details paper-original" open>
+              <summary>Abstract</summary>
+              <p class="paper-abstract-full" lang="en">${escapeHtml(abstract || "The source has not provided an abstract.")}</p>
+            </details>
+            ${paper.abstract_zh ? `<details class="paper-abstract-details paper-translation"><summary>中文译文 <span>展开阅读</span></summary><p class="paper-abstract-full" lang="zh-CN">${escapeHtml(paper.abstract_zh)}</p></details>` : ""}
+            ${review.reason_zh ? `<div class="paper-editor-note"><span class="paper-editor-label">推荐依据 · 摘要初筛</span><p>${escapeHtml(review.reason_zh)}</p><small>贡献判断待全文与实验核验</small></div>` : ""}
             <div class="paper-tags">
               ${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("")}
             </div>
@@ -2425,7 +2450,7 @@
     try {
       const data = await api("/api/daily/start", {
         method: "POST",
-        body: JSON.stringify({ user_id: userId, days, target_date: $("paperDate").value, limit_per_source: configuredDailyLimit(), ...options })
+        body: JSON.stringify({ user_id: userId, days, target_date: $("paperDate").value, limit_per_source: configuredDailyLimit(), ...options, force_refresh: true })
       });
       const taskId = data.task?.task_id || "";
       if (data.cached || data.task?.status === "completed") {

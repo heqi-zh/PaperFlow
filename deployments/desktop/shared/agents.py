@@ -28,6 +28,9 @@ import yaml
 from paperflow.providers import build_llm_provider
 from paperflow import env as shared_env
 from paperflow import roles as role_utils
+from paperflow.recommendations import profile_fingerprint, scope_match
+from paperflow.translations import translate_papers
+from paperflow.editorial import review_candidates
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -285,6 +288,11 @@ def _paper_card(paper: Dict[str, Any], number: int) -> Dict[str, Any]:
         "arxiv_id": _paper_arxiv_id(paper, metadata),
         "doi": _paper_doi(paper, metadata),
         "title": str(paper.get("title") or "Untitled"),
+        "title_zh": paper.get("title_zh") or metadata.get("title_zh") or "",
+        "abstract_zh": paper.get("abstract_zh") or metadata.get("abstract_zh") or "",
+        "translation_status": paper.get("translation_status") or metadata.get("translation_status") or "",
+        "matched_interests": paper.get("matched_interests") or metadata.get("matched_interests") or [],
+        "recommendation_review": paper.get("recommendation_review") or metadata.get("recommendation_review") or {},
         "authors": authors[:8] if isinstance(authors, list) else [],
         "abstract": str(paper.get("abstract") or ""),
         "category": paper.get("category") or metadata.get("category") or "unknown",
@@ -2338,6 +2346,9 @@ def start_daily_push_task(
             limit_per_source=requested_limit,
             target_date=normalized_target_date,
             sources=requested_sources,
+        ) and (
+            cached_push.get("metadata", {}).get("profile_fingerprint")
+            == profile_fingerprint(db_ops.get_profile(cleaned_user_id) or {})
         ):
             metadata = dict(cached_push.get("metadata") or {})
             metadata["cached"] = True
@@ -2432,7 +2443,21 @@ def get_daily_push_task(task_id: str = "", user_id: str = "") -> Dict[str, Any]:
 
 
 def load_latest_push(user_id: str) -> Dict[str, Any]:
-    return {"push": _push_payload(db_ops.get_latest_push(user_id))}
+    push = db_ops.get_latest_push(user_id)
+    profile = db_ops.get_profile(user_id) or {}
+    if push:
+        papers = list(push.get("papers") or [])
+        push["papers"] = []
+        for paper in papers:
+            allowed, labels, _ = scope_match(paper, profile)
+            if allowed:
+                paper["matched_interests"] = labels
+                push["papers"].append(paper)
+        push["papers"], editorial_metadata = review_candidates(push["papers"], profile)
+        push.setdefault("metadata", {}).update(editorial_metadata)
+        translate_papers(push["papers"])
+        push.setdefault("metadata", {})["paper_count"] = len(push["papers"])
+    return {"push": _push_payload(push)}
 
 
 def _log_feedback_event(
