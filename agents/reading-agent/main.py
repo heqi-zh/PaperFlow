@@ -103,7 +103,7 @@ READING_REPORT_EVIDENCE_VERSION = (
     or "2026-04-27-v4"
 )
 READING_REPORT_EVIDENCE_CACHE_ENABLED = os.environ.get("READING_REPORT_EVIDENCE_CACHE_ENABLED", "1").strip().lower() not in {"0", "false", "off", "no"}
-READING_REPORT_OUTPUT_VERSION = os.environ.get("READING_REPORT_OUTPUT_VERSION", "2026-06-17-v6").strip() or "2026-06-17-v6"
+READING_REPORT_OUTPUT_VERSION = os.environ.get("READING_REPORT_OUTPUT_VERSION", "2026-10-28-v7").strip() or "2026-10-28-v7"
 READING_REPORT_PROFILE_RETRIEVAL_WEIGHT = float(os.environ.get("READING_REPORT_PROFILE_RETRIEVAL_WEIGHT", "0.25"))
 HTTP_RETRY_TOTAL = int(os.environ.get("PAPERFLOW_HTTP_RETRIES", "2"))
 HTTP_RETRY_BACKOFF = float(os.environ.get("PAPERFLOW_HTTP_BACKOFF", "0.8"))
@@ -2645,6 +2645,7 @@ def _save_reading_report_markdown(
         "arxiv_id": paper.get("arxiv_id"),
         "doi": paper.get("doi"),
         "title": paper.get("title"),
+        "title_zh": report_payload.get("title_zh"),
         "institution": report_payload.get("institution") or paper.get("institution") or paper.get("affiliation"),
         "publish_date": paper.get("publish_date"),
         "pdf_path": paper.get("pdf_path"),
@@ -4266,6 +4267,7 @@ def _merge_report_payload(base: Dict[str, Any], llm_payload: Optional[Dict[str, 
 
     merged = dict(base)
     for key in (
+        "title_zh",
         "one_sentence_summary",
         "clean_abstract_summary",
         "problem_analysis",
@@ -4353,6 +4355,39 @@ def _report_style_label(style: str) -> str:
     }.get(style, "standard")
 
 
+def _chinese_report_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Never substitute untranslated source excerpts for Chinese reading notes."""
+    result = dict(payload)
+    fields = (
+        "title_zh", "abstract", "clean_abstract_summary", "one_sentence_summary",
+        "problem_analysis", "related_work", "solution_approach", "experiments",
+        "experimental_observations", "future_directions", "paper_summary",
+        "research_background", "core_method", "key_results", "analysis_note",
+        "main_contributions", "limitations", "relevance_points", "reading_focus", "keywords",
+    )
+    def chinese_or_empty(value: Any) -> str:
+        text = _clean_text(value)
+        # Acronyms, formulae, method/dataset names inside Chinese prose are fine.
+        prose = re.sub(r"https?://\S+|`[^`]*`|\$[^$]*\$", "", text)
+        if not re.search(r"[\u4e00-\u9fff]", prose):
+            return ""
+        if re.search(r"(?:[A-Za-z][A-Za-z'-]*[ \t]+){12,}[A-Za-z]", prose):
+            return ""
+        return text
+    for key in fields:
+        value = result.get(key)
+        if isinstance(value, (list, tuple)):
+            result[key] = [clean for item in value if (clean := chinese_or_empty(item))]
+        elif value is not None:
+            result[key] = chinese_or_empty(value)
+    if result.get("generation_provider") == "heuristic":
+        for key in fields:
+            if key != "title_zh":
+                result[key] = [] if isinstance(result.get(key), (list, tuple)) else ""
+        result["analysis_note"] = "中文精读生成未成功，当前仅保留基本信息；英文原文片段未充当精读内容。请重新生成。"
+    return result
+
+
 def generate_reading_report(
     paper: Dict[str, Any],
     user_profile: Dict[str, Any],
@@ -4366,10 +4401,12 @@ def generate_reading_report(
     )
     language = _normalize_response_language(payload.get("response_language") or response_language)
     is_en = language == "en"
+    if not is_en:
+        payload = _chinese_report_payload(payload)
     labels = {
-        "untitled": "Untitled Paper" if is_en else "Untitled Paper",
-        "source_no_abstract_link": "The source did not return a usable abstract. View the original paper here:" if is_en else "源站暂未返回可用摘要。请直接查看原文链接：",
-        "source_no_abstract": "The source did not return a usable abstract. Check the original PDF or paper page directly." if is_en else "源站暂未返回可用摘要，建议直接查看原文 PDF 或论文主页。",
+        "untitled": "Untitled Paper" if is_en else "论文中文标题暂未生成",
+        "source_no_abstract_link": "The source did not return a usable abstract. View the original paper here:" if is_en else "中文摘要暂未生成，可通过原文链接阅读：",
+        "source_no_abstract": "The source did not return a usable abstract. Check the original PDF or paper page directly." if is_en else "中文摘要暂未生成，可通过原文 PDF 或论文主页阅读。",
         "analysis_pdf": "PDF full text" if is_en else "PDF 全文",
         "analysis_source_page": "source page + metadata" if is_en else "源站正文 + 元数据",
         "analysis_metadata": "abstract + metadata" if is_en else "摘要 + 元数据",
@@ -4379,10 +4416,10 @@ def generate_reading_report(
         "one_sentence_empty": "There is not enough information to generate a one-sentence summary yet." if is_en else "当前没有足够信息生成一句话总结。",
         "abstract": "Abstract" if is_en else "摘要",
         "problem_empty": "Start from the abstract and introduction to verify the research problem." if is_en else "建议先回到原文摘要和引言确认研究问题。",
-        "related_empty": "The automatic parser did not extract a stable Related Work thread. Check the introduction, related-work section, and citations to identify the main compared methods." if is_en else "当前自动解析没有稳定提取出 Related Work 的完整脉络。可先从论文引言、相关工作章节和引用线索核对它主要对比了哪些方法。",
+        "related_empty": "The automatic parser did not extract a stable Related Work thread. Check the introduction, related-work section, and citations to identify the main compared methods." if is_en else "当前自动解析没有稳定提取出相关工作的完整脉络。可先从论文引言、相关工作章节和引用线索核对它主要对比了哪些方法。",
         "related_prefix": "Based on current evidence, the paper is positioned around: " if is_en else "从当前证据可见，论文的定位至少包括：",
-        "solution_empty": "Method details were not extracted reliably; focus on the Method / Approach section." if is_en else "当前未成功提炼方法细节，请重点阅读 Method / Approach 部分。",
-        "experiments_empty": "No clear experimental setup was extracted; check Experiments / Results, tables, figures, and key metrics." if is_en else "当前没有提炼出明确实验设置，请重点核对 Experiments / Results、表格、图示和主要指标。",
+        "solution_empty": "Method details were not extracted reliably; focus on the Method / Approach section." if is_en else "当前未成功提炼方法细节，请重点阅读原文的方法章节。",
+        "experiments_empty": "No clear experimental setup was extracted; check Experiments / Results, tables, figures, and key metrics." if is_en else "当前没有提炼出明确实验设置，请重点核对原文的实验与结果章节、表格、图示和主要指标。",
         "future_empty": "Current information is insufficient; revisit limitations, failure cases, ablation gaps, and cross-domain generalization in the paper." if is_en else "当前信息不足，建议从局限性、失败案例、消融缺口和跨领域泛化四个角度回原文继续挖掘。",
         "contributions_prefix": "Main contributions include: " if is_en else "主要贡献包括：",
         "limitations_prefix": "Important boundaries include: " if is_en else "需要注意的边界包括：",
@@ -4407,10 +4444,10 @@ def generate_reading_report(
     list_joiner = "; " if is_en else "；"
     sentence_end = "." if is_en else "。"
     report_style = _normalize_report_style(payload.get("report_style"))
-    title = _clean_text(paper.get("title")) or labels["untitled"]
-    abstract = _clean_abstract_text(payload.get("abstract") or paper.get("abstract"))
+    title = (_clean_text(paper.get("title")) if is_en else _clean_text(payload.get("title_zh"))) or labels["untitled"]
+    abstract = _clean_abstract_text(payload.get("abstract") or (paper.get("abstract") if is_en else ""))
     clean_abstract_summary = _clean_text(payload.get("clean_abstract_summary"))
-    if clean_abstract_summary and (not _clean_text(abstract) or _looks_like_extraction_noise(abstract)):
+    if clean_abstract_summary and (not is_en or not _clean_text(abstract) or _looks_like_extraction_noise(abstract)):
         abstract = clean_abstract_summary
     if not _clean_text(abstract):
         fallback_source = _get_direct_pdf_url(paper) or _get_first_url(
@@ -4463,16 +4500,16 @@ def generate_reading_report(
     lines.append("")
 
     if report_style == "brief":
-        lines.append("## Brief Scan")
+        lines.append("## Brief Scan" if is_en else "## 快速概览")
         lines.append("")
-        lines.append(payload.get("one_sentence_summary") or "No one-sentence summary is available yet.")
+        lines.append(payload.get("one_sentence_summary") or labels["one_sentence_empty"])
         lines.append("")
     elif report_style == "deep":
-        lines.append("## Deep-Dive Checklist")
+        lines.append("## Deep-Dive Checklist" if is_en else "## 精读重点")
         lines.append("")
-        lines.append("- Verify the core assumption against the method section.")
-        lines.append("- Check whether the evidence supports the claimed improvement.")
-        lines.append("- Compare the limitation section with your current research direction.")
+        lines.append("- Verify the core assumption against the method section." if is_en else "- 结合方法章节核对核心假设。")
+        lines.append("- Check whether the evidence supports the claimed improvement." if is_en else "- 检查实验证据是否支持论文宣称的改进。")
+        lines.append("- Compare the limitation section with your current research direction." if is_en else "- 结合当前研究方向分析论文的局限。")
         lines.append("")
 
     keywords = payload.get("keywords") or []

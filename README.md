@@ -12,6 +12,8 @@ ChatGPT 账号由使用者自行授权；源码不包含维护者的登录凭据
 当前新增的凭据加密实现使用 macOS 钥匙串，ChatGPT 适配建议从源码运行。
 安装方法、隐私边界与本地 embedding 配置见 [ChatGPT 登录接入说明](docs/chatgpt-login.md)。
 
+论文卡片的「立即精读」直接启动该论文的后台报告并打开进度，无需复制 arXiv ID；「加入待读」用于批量选择。报告面板可直接选择当前推荐论文，手动 arXiv/PDF 导入收在可选展开区中。
+
 可在本地画像的 `editorial_preferences` 设置更细的贡献筛选偏好：模型按主要贡献筛查，保留简短推荐依据；证据不足暂不推荐，不用关键词或论文自述断言已验证的重大突破。筛选结论为摘要初筛，缓存也只保存在忽略的 `data/` 目录中。
 
 原项目的作者信息、MIT 许可证和下面的上游说明予以保留。下文涵盖上游功能，不代表所有来源都已在本版逐一验证。
@@ -659,3 +661,5 @@ The formal citation will be updated after the paper is published.
 ## License
 
 PaperFlow is released under the MIT License. See [LICENSE](https://github.com/OpenRaiser/PaperFlow/blob/main/LICENSE).
+
+中文界面的精读报告统一使用中文标题、摘要、分析和关键词；保留必要的方法名、缩写及作者姓名。模型未成功生成时会提示重新生成，不将英文原文片段冒充中文精读。

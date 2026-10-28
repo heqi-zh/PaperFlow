@@ -673,7 +673,7 @@ def _report_record(path: Path) -> Dict[str, Any]:
     raw = path.read_text(encoding="utf-8", errors="replace")
     metadata, body = _extract_frontmatter(raw)
     stat = path.stat()
-    title = str(metadata.get("title") or _report_title(body, path))
+    title = str(metadata.get("title_zh") or metadata.get("title") or _report_title(body, path))
     saved_at = str(
         metadata.get("saved_at")
         or metadata.get("updated_at")
@@ -2840,6 +2840,13 @@ def _write_reading_placeholder(
     error: str = "",
     response_language: str = "zh",
 ) -> None:
+    # A repeated click must never replace a completed report with a loading page.
+    if report_path.exists():
+        existing_meta, existing_body = _extract_frontmatter(report_path.read_text(encoding="utf-8"))
+        is_placeholder = (existing_meta.get("report_version") == "in-progress"
+                          or existing_meta.get("report_status") in {"queued", "running", "failed"})
+        if existing_body.strip() and not is_placeholder:
+            return
     title = str(paper.get("title") or report_path.stem).strip() or report_path.stem
     now = datetime.now().isoformat(timespec="seconds")
     is_en = _normalize_response_language(response_language) == "en"

@@ -2378,7 +2378,7 @@ def test_reading_report_template_changes_with_saved_style() -> None:
         },
     )
 
-    assert "Deep-Dive Checklist" in report
+    assert "## 精读重点" in report
 
 
 def test_reading_report_template_supports_english_response_language() -> None:

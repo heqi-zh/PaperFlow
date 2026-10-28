@@ -142,7 +142,7 @@
         sourceFallback: "论文",
         profileMatch: "画像匹配",
         authorPending: "作者信息待补充",
-        read: "精读",
+        read: "立即精读",
         readSelected: "已选精读",
         readReport: "精读报告",
         loading: "加载中",
@@ -256,8 +256,8 @@
         openDoc: "飞书文档",
         copyPath: "复制路径",
         bodyEmpty: "尚未选择报告。",
-        readArxiv: "精读 arXiv",
-        readPdf: "精读本地 PDF",
+        readArxiv: "导入其他 arXiv 论文",
+        readPdf: "导入本地 PDF",
         arxivPlaceholder: "2606.03963 或 https://arxiv.org/abs/2606.03963",
         pdfTitlePlaceholder: "可选标题",
         generate: "生成报告",
@@ -2150,6 +2150,7 @@
       history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${name}`);
     }
     window.scrollTo({ top: 0, left: 0 });
+    if (name === "reports") renderRecommendedReadingPicker();
     if (name === "reports" && !options.skipLoad) runAction(() => refreshReports({ keepSelection: true }), "加载报告");
     if (name === "wiki" && !options.skipLoad) runAction(loadWiki, "加载 Wiki");
     if (name === "chat" && !options.skipLoad) runAction(() => loadChatSessions({ openLatest: true }), "加载历史对话");
@@ -2368,12 +2369,33 @@
     } catch { return ""; }
   }
 
+  function renderRecommendedReadingPicker() {
+    const select = $("recommendedReadingSelect");
+    const button = $("readRecommendedBtn");
+    if (!select || !button) return;
+    const previous = select.value;
+    const papers = state.push?.papers || [];
+    select.innerHTML = papers.length ? papers.map((paper, index) => {
+      const number = Number(paper.number || index + 1);
+      return `<option value="${number}">${escapeHtml(paper.title || paper.title_zh || `Paper ${number}`)}</option>`;
+    }).join("") : `<option value="">请先在论文流中加载推荐，或选择历史批次</option>`;
+    const hasPrevious = papers.some((p, i) => String(p.number || i + 1) === previous);
+    if (hasPrevious) select.value = previous;
+    const selected = [...state.selected][0];
+    if (!hasPrevious && selected) select.value = String(selected);
+    button.disabled = !papers.length;
+    if ($("recommendedReadingHint")) $("recommendedReadingHint").textContent = papers.length
+      ? `当前批次 ${papers.length} 篇 · 自动使用论文链接和 PDF，无需填写 arXiv ID`
+      : "从论文卡片点击“立即精读”即可开始；手动导入仅用于额外论文。";
+  }
+
   function renderPush(push, options = {}) {
     state.push = push;
     state.selected.clear();
     state.skipped.clear();
     state.later.clear();
     const papers = push?.papers || [];
+    renderRecommendedReadingPicker();
     const metadata = push?.metadata || {};
     $("candidateStat").textContent = metadata.total_fetched ?? metadata.fetched_count ?? papers.length ?? 0;
     $("filteredStat").textContent = metadata.paper_count ?? metadata.filtered_count ?? metadata.ranked_count ?? papers.length ?? 0;
@@ -2429,6 +2451,7 @@
           </div>
           <div class="paper-actions">
             <button data-action="read" data-number="${number}" class="${reportId ? "ready" : ""} ${isReading ? "loading" : ""}" type="button" ${isReading ? "disabled" : ""} aria-label="${actionLabel(ui().papers.read)}">${isReading ? ui().papers.loading : reportId ? ui().papers.readReport : ui().papers.read}</button>
+            <button data-action="queue" data-number="${number}" type="button" aria-label="${actionLabel("加入待读")}">加入待读</button>
             <button data-action="skip" data-number="${number}" type="button" aria-label="${actionLabel(ui().papers.skip)}">${ui().papers.skip}</button>
             <button data-action="later" data-number="${number}" type="button" aria-label="${actionLabel(ui().papers.later)}">${ui().papers.later}</button>
           </div>
@@ -2869,7 +2892,13 @@
       if (skipButton) skipButton.textContent = disposition === "skip" ? ui().papers.skipped : ui().papers.skip;
       if (laterButton) laterButton.textContent = disposition === "later" ? ui().papers.laterAdded : ui().papers.later;
     });
+    document.querySelectorAll('.paper-actions button[data-action="queue"]').forEach((button) => {
+      const selected = state.selected.has(Number(button.dataset.number));
+      button.textContent = selected ? "已加入待读" : "加入待读";
+      button.classList.toggle("active", selected);
+    });
     updateReadButtons();
+    renderRecommendedReadingPicker();
   }
 
   function updateReadButtons() {
@@ -2879,7 +2908,7 @@
       const reportId = state.paperReports.get(reportKey);
       const isReading = state.paperReading.has(reportKey);
       button.disabled = isReading;
-      button.textContent = isReading ? ui().papers.loading : reportId ? ui().papers.readReport : state.selected.has(number) ? ui().papers.readSelected : ui().papers.read;
+      button.textContent = isReading ? ui().papers.loading : reportId ? ui().papers.readReport : ui().papers.read;
       button.classList.toggle("loading", isReading);
       button.classList.toggle("ready", Boolean(reportId) && !isReading);
     });
@@ -2970,21 +2999,39 @@
 
   async function readSinglePaper(number) {
     if (!state.push?.push_id) throw new Error(ui().papers.loadPushFirst);
+    if (!(state.push.papers || []).some((paper, index) => Number(paper.number || index + 1) === number)) {
+      throw new Error("请先选择一篇推荐论文");
+    }
     const reportKey = paperReportKey(number);
     const existingReportId = state.paperReports.get(reportKey);
     if (existingReportId) {
       await openReport(existingReportId);
       return;
     }
-    setPaperDisposition(number, "read");
+    if (state.paperReading.has(reportKey)) return;
+    if ($("recommendedReadingSelect")) $("recommendedReadingSelect").value = String(number);
+    state.paperReading.add(reportKey);
+    updateReadButtons();
+    try {
+      // Start exactly this paper, leaving other pending selections untouched.
+      await submitFeedback(true, {paperNumbers:[number]});
+    } finally {
+      state.paperReading.delete(reportKey);
+      updateReadButtons();
+    }
   }
 
-  async function submitFeedback(generateReports) {
+  async function submitFeedback(generateReports, options = {}) {
     if (!state.push?.push_id) {
       showPaperFeedback("error", ui().papers.submitUnavailableTitle, ui().papers.submitUnavailableDetail);
       throw new Error(ui().papers.loadPushFirst);
     }
-    const selectedNumbers = Array.from(state.selected);
+    const singlePaper = Array.isArray(options.paperNumbers);
+    const selectedNumbers = singlePaper ? options.paperNumbers : Array.from(state.selected);
+    const pushId = state.push.push_id;
+    const userId = currentUser();
+    const skippedNumbers = singlePaper ? [] : Array.from(state.skipped);
+    const laterNumbers = singlePaper ? [] : Array.from(state.later);
     if (generateReports && !selectedNumbers.length) {
       showPaperFeedback("warning", ui().papers.chooseReadTitle, ui().papers.chooseReadDetail);
       showFeedbackToast("warning", ui().papers.chooseReadTitle, ui().papers.chooseReadToast);
@@ -2994,7 +3041,7 @@
       return;
     }
     const endpoint = generateReports ? "/api/submit" : "/api/feedback";
-    const readingKeys = generateReports ? selectedNumbers.map((number) => paperReportKey(number)) : [];
+    const readingKeys = generateReports ? selectedNumbers.map((number) => paperReportKey(number, pushId)) : [];
     setSubmitButtonsBusy(true, generateReports);
     readingKeys.forEach((key) => state.paperReading.add(key));
     updateSelectionSummary();
@@ -3007,11 +3054,11 @@
       const data = await api(endpoint, {
         method: "POST",
         body: JSON.stringify({
-          user_id: currentUser(),
-          push_id: state.push.push_id,
+          user_id: userId,
+          push_id: pushId,
           selected_numbers: selectedNumbers,
-          skipped_numbers: Array.from(state.skipped),
-          later_numbers: Array.from(state.later),
+          skipped_numbers: skippedNumbers,
+          later_numbers: laterNumbers,
           generate_reports: generateReports,
           write_feishu: $("writeFeishuReports")?.checked || false,
           response_language: responseLanguage()
@@ -3020,7 +3067,7 @@
       if (generateReports) {
         (data.reports?.created_docs || []).forEach((doc, index) => {
           const number = selectedNumbers[index];
-          if (number && doc?.report_id) state.paperReports.set(paperReportKey(number), doc.report_id);
+          if (number && doc?.report_id) state.paperReports.set(paperReportKey(number, pushId), doc.report_id);
         });
       }
       showSubmitResult(data, generateReports);
@@ -3282,7 +3329,15 @@
   function loadReportAnnotation(reportId) {
     if (!reportId) return "";
     try {
-      return window.localStorage.getItem(reportAnnotationKey(reportId)) || "";
+      const stored = window.localStorage.getItem(reportAnnotationKey(reportId)) || "";
+      if (!stored) return "";
+      try {
+        const annotation = JSON.parse(stored);
+        return annotation.source === state.currentReport?.markdown ? annotation.html || "" : "";
+      } catch {
+        // Keep legacy annotations stored, but do not overlay a newly regenerated report.
+        return state.currentReport?.report_version === "2026-10-28-v7" ? "" : stored;
+      }
     } catch (error) {
       return "";
     }
@@ -3293,7 +3348,7 @@
     const body = $("reportViewerBody");
     if (!reportId || !body || body.classList.contains("empty")) return;
     try {
-      window.localStorage.setItem(reportAnnotationKey(reportId), body.innerHTML);
+      window.localStorage.setItem(reportAnnotationKey(reportId), JSON.stringify({source: state.currentReport.markdown, html: body.innerHTML}));
       $("clearReportAnnotationsBtn").disabled = false;
     } catch (error) {
       console.warn("Unable to save report annotation", error);
@@ -3380,6 +3435,15 @@
     hideReportAnnotationToolbar();
   }
 
+  function reportStatusLabel(report) {
+    const en = responseLanguage() === "en";
+    if (report.report_version === "in-progress") {
+      return /失败|failed/i.test(report.snippet || "") ? (en ? "Failed" : "生成失败") : (en ? "Generating" : "正在生成");
+    }
+    if (report.generation_provider === "heuristic") return en ? "Basic parsing only" : "基础解析，待重新生成";
+    return report.status || ui().reports.completed;
+  }
+
   function renderReportList(reports, activeId = "") {
     const target = $("reportsList");
     if (!reports.length) {
@@ -3391,7 +3455,7 @@
     target.innerHTML = reports.map((report) => `
       <button class="report-row ${report.report_id === activeId ? "active" : ""} ${state.highlightedReports.has(report.report_id) ? "highlighted" : ""}" data-report-id="${escapeHtml(report.report_id)}" type="button">
         <h3>${escapeHtml(report.title || ui().reports.defaultTitle)}</h3>
-        <p>${escapeHtml(report.saved_at || "")} · ${escapeHtml(report.status || ui().reports.completed)}</p>
+        <p>${escapeHtml(report.saved_at || "")} · ${escapeHtml(reportStatusLabel(report))}</p>
         <p>${escapeHtml(report.snippet || report.report_path || "")}</p>
       </button>
     `).join("");
@@ -5973,8 +6037,10 @@
       if (!button) return;
       const number = Number(button.dataset.number);
       if (button.dataset.action === "read") {
-        runAction(() => readSinglePaper(number), "选择精读论文");
+        runAction(() => readSinglePaper(number), "开始精读");
         return;
+      } else if (button.dataset.action === "queue") {
+        setPaperDisposition(number, "read");
       } else if (button.dataset.action === "skip") {
         setPaperDisposition(number, "skip");
       } else if (button.dataset.action === "later") {
@@ -6076,6 +6142,8 @@
     $("reportViewerBody").addEventListener("mouseup", () => window.setTimeout(updateReportAnnotationToolbar, 0));
     $("reportViewerBody").addEventListener("keyup", updateReportAnnotationToolbar);
     window.addEventListener("scroll", hideReportAnnotationToolbar, true);
+    $("readRecommendedBtn")?.addEventListener("click", () => runAction(() => readSinglePaper(Number($("recommendedReadingSelect").value)), "开始精读"));
+    $("backToPapersBtn")?.addEventListener("click", () => setView("papers"));
     $("readArxivBtn").addEventListener("click", () => runAction(() => directRead("arxiv"), "生成报告"));
     $("readPdfBtn").addEventListener("click", () => runAction(() => directRead("pdf"), "生成报告"));
 

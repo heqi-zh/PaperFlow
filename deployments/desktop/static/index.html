@@ -196,6 +196,14 @@
             </aside>
 
             <article class="report-reader">
+              <section class="recommended-reading" aria-label="从推荐论文开始精读">
+                <div class="recommended-reading-head"><strong>从推荐论文开始精读</strong><button id="backToPapersBtn" type="button">返回论文流</button></div>
+                <p id="recommendedReadingHint">点击论文卡片的“立即精读”，无需填写 arXiv ID。</p>
+                <div class="recommended-reading-controls">
+                  <select id="recommendedReadingSelect" aria-label="选择要精读的推荐论文"><option value="">正在加载推荐论文</option></select>
+                  <button id="readRecommendedBtn" class="primary" type="button" disabled>立即精读</button>
+                </div>
+              </section>
               <div class="reader-head">
                 <div>
                   <h2 id="reportViewerTitle">选择一篇报告</h2>
@@ -223,7 +231,9 @@
               </div>
               <div id="reportViewerBody" class="markdown-body empty">尚未选择报告。</div>
 
-              <div class="direct-read-grid">
+              <details class="manual-reading-import">
+                <summary>手动导入其他论文（可选）</summary>
+                <div class="direct-read-grid">
                 <div class="direct-card">
                   <h3>精读 arXiv</h3>
                   <input id="directArxivId" placeholder="2606.03963 或 https://arxiv.org/abs/2606.03963">
@@ -231,13 +241,14 @@
                   <div id="directArxivStatus" class="direct-read-status" role="status" aria-live="polite" hidden></div>
                 </div>
                 <div class="direct-card">
-                  <h3>精读本地 PDF</h3>
+                  <h3>导入本地 PDF</h3>
                   <input id="directPdfPath" placeholder="D:/papers/example.pdf">
                   <input id="directPdfTitle" placeholder="可选标题">
                   <button id="readPdfBtn" class="primary" type="button">生成报告</button>
                   <div id="directPdfStatus" class="direct-read-status" role="status" aria-live="polite" hidden></div>
                 </div>
-              </div>
+                </div>
+              </details>
             </article>
           </div>
         </section>

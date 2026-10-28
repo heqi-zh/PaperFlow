@@ -1699,7 +1699,7 @@ def synthesize_reading_report_with_llm(
             "完整性无条件优先于压缩：默认穷尽覆盖论文动机、相关研究、技术路线、实验设计、关键发现、局限、边界条件、反例、失败模式、可探索方向、相邻问题和跨领域联系；"
             "当你在“写进去”和“省略”之间犹豫时，选择写进去。用户会自行筛选；你的职责是尽量不漏信息。适度重复可以接受，信息缺口不可以接受。"
             "结构必须高度可扫读，适合飞书文档阅读；每个长字段应使用清晰小标题、编号列表、短表格式描述或分点组织。长回答没问题，但不能是无结构长段落。"
-            "默认使用中文。只有关键词、论文专名、方法名、数据集名、模型名和必要术语保留英文。"
+            "全文用中文连贯表述，不得粘贴英文摘要、英文原文段落或中英对照。方法、数据集、模型名称及必要缩写可保留。title_zh 必须为中文论文标题；clean_abstract_summary 必须是完整忠实的中文摘要译文。"
             "请假设用户具备较强科研背景，从论文前沿问题、机制解释、技术权衡、隐含假设、评价设计和研究范式竞争开始，不要写泛泛科普。"
             "不要以夸奖用户或论文开头。如果 heuristic_draft 的前提薄弱、证据不足或可能误导，要在对应字段中直接指出，然后继续完整回答。"
             "如果提供了 retrieved_evidence，请优先参考这些 PDF 语义检索命中的证据片段，"
@@ -1714,10 +1714,10 @@ def synthesize_reading_report_with_llm(
             "不要编造具体实验数值、数据集、baseline、公式含义、作者动机或代码资源；信息不足时明确指出缺口。"
             "可以改写证据，不要大段逐字复制。"
             "不要让诚实降低输出量：要诚实并且详尽，而不是用“证据不足”替代完整分析。输出应接近最大化信息密度的深度读书笔记，而不是推荐卡片。"
-            "problem_analysis、related_work、solution_approach、experiments、experimental_observations、future_directions 在证据充分时每个字段通常写 800-1800 个中文字；"
-            "paper_summary 在证据充分时通常写 1200-3000 个中文字，用于完整复述论文的论证主线、技术主线和实验主线。"
+            "problem_analysis、related_work、solution_approach、experiments、experimental_observations、future_directions 在证据充分时每个字段写 250-500 个中文字，不重复堆砌；"
+            "paper_summary 写 300-600 个中文字，总结论证、技术和实验主线。整份 JSON 控制在 4500 个中文字以内，确保完整输出。"
             "只输出 JSON 对象，不要 Markdown，不要解释，不要代码块。字段包括："
-            "one_sentence_summary, clean_abstract_summary, problem_analysis, related_work, solution_approach, experiments, "
+            "title_zh, one_sentence_summary, clean_abstract_summary, problem_analysis, related_work, solution_approach, experiments, "
             "experimental_observations, future_directions, paper_summary, research_background, core_method, key_results, "
             "institution, main_contributions, limitations, relevance_points, reading_focus, keywords, recommendation_label, analysis_note。"
             "problem_analysis 对应“这篇论文试图解决什么问题”；related_work 对应“有哪些相关研究”；"
@@ -1727,7 +1727,7 @@ def synthesize_reading_report_with_llm(
             "research_background/core_method/key_results/main_contributions/limitations/relevance_points/reading_focus 是兼容旧模板的摘要字段，也要填写。"
             "institution 用于根据元数据和 PDF 正文推断作者机构/单位；证据不足时返回空字符串，不要编造。"
             "main_contributions, limitations, relevance_points, reading_focus, keywords 必须是字符串数组；其他字段是字符串。"
-            "keywords 用 5-8 个英文小写短语，按论文核心话题排序，例如 [\"diffusion model\", \"video generation\", \"long context\"]。"
+            "keywords 用 5-8 个中文短语，按论文核心话题排序。"
             "analysis_note 用一句话说明本次生成是否参考了 PDF 检索证据。"
             "其中 recommendation_label 只能是“强烈推荐”“推荐阅读”“值得快速浏览”“按需阅读”之一。"
         )
@@ -1746,6 +1746,7 @@ def synthesize_reading_report_with_llm(
 
     normalized: Dict[str, Any] = {}
     for key in (
+        "title_zh",
         "one_sentence_summary",
         "clean_abstract_summary",
         "problem_analysis",
