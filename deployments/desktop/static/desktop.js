@@ -1412,6 +1412,7 @@
     setText("#openReportPdfBtn", text.reports.openPdf);
     setText("#openReportDocBtn", text.reports.openDoc);
     setText("#copyReportPathBtn", text.reports.copyPath);
+    updateRegenerateReportButton();
     setText(".direct-card:nth-child(1) h3", text.reports.readArxiv);
     setText(".direct-card:nth-child(2) h3", text.reports.readPdf);
     setAttr("#directArxivId", "placeholder", text.reports.arxivPlaceholder);
@@ -3262,6 +3263,7 @@
     menu.setAttribute("role", "menu");
     menu.innerHTML = `
       <button type="button" data-report-menu-action="highlight" role="menuitem"></button>
+      <button type="button" data-report-menu-action="regenerate" role="menuitem">重新生成</button>
       <button type="button" data-report-menu-action="delete" role="menuitem" class="danger"></button>
     `;
     menu.addEventListener("click", (event) => {
@@ -3272,6 +3274,8 @@
       hideReportContextMenu();
       if (action === "highlight") {
         toggleReportCardHighlight(reportId);
+      } else if (action === "regenerate") {
+        runAction(() => regenerateReport(reportId), "重新生成精读");
       } else if (action === "delete") {
         runAction(() => deleteReportCard(reportId), "删除报告");
       }
@@ -3298,6 +3302,10 @@
     menu.dataset.reportId = reportId;
     menu.querySelector('[data-report-menu-action="highlight"]').textContent = labels.highlight;
     menu.querySelector('[data-report-menu-action="delete"]').textContent = labels.delete;
+    const report = state.reports.find(item => item.report_id === reportId);
+    const retry = menu.querySelector('[data-report-menu-action="regenerate"]');
+    retry.disabled = !report?.can_regenerate || report.user_id !== currentUser() || ["queued", "running"].includes(report.regeneration_task?.status);
+    retry.title = report?.can_regenerate ? "重新读取这篇论文并生成新版" : "报告缺少论文链接或本地 PDF";
     menu.classList.remove("hidden");
     const rect = menu.getBoundingClientRect();
     const left = Math.min(Math.max(8, x), window.innerWidth - rect.width - 8);
@@ -3440,6 +3448,8 @@
   }
 
   function reportStatusLabel(report) {
+    if (["queued", "running"].includes(report.regeneration_task?.status)) return "正在重新生成";
+    if (report.regeneration_task?.status === "failed") return "重生成失败，已保留原报告";
     const en = responseLanguage() === "en";
     if (report.report_version === "in-progress") {
       return /失败|failed/i.test(report.snippet || "") ? (en ? "Failed" : "生成失败") : (en ? "Generating" : "正在生成");
@@ -3474,6 +3484,7 @@
     $("clearReportAnnotationsBtn").disabled = true;
     hideReportAnnotationToolbar();
     setReportLinks({});
+    updateRegenerateReportButton();
   }
 
   async function refreshReports(options = {}) {
@@ -3509,7 +3520,7 @@
       if (task.status === "completed" || task.status === "failed") {
         const detail = `${task.completed_count || 0}/${task.total_count || 0}`;
         showFeedbackToast(task.status === "failed" ? "warning" : "success", task.status === "failed" ? "精读任务结束但有错误" : "精读任务完成", detail);
-        return;
+        return task;
       }
     }
   }
@@ -3526,6 +3537,43 @@
       button.disabled = !value;
       button.dataset.href = value;
     });
+  }
+
+  function updateRegenerateReportButton() {
+    const button = $("regenerateReportBtn");
+    if (!button) return;
+    const report = state.currentReport;
+    const task = report?.regeneration_task;
+    const busy = Boolean(report && state.regeneratingReportId === report.report_id) || ["queued", "running"].includes(task?.status);
+    button.disabled = !report || !report.can_regenerate || report.user_id !== currentUser() || busy;
+    button.textContent = busy ? "正在重新生成…" : "重新生成";
+    button.title = !report ? "请先打开一篇报告" : !report.can_regenerate ? "报告缺少论文链接或本地 PDF" : "重新读取这篇论文，成功后替换为新版；旧版会备份";
+    const status = $("reportRegenerationStatus");
+    if (status) status.textContent = busy ? "正在重新生成；原报告仍可阅读，成功后自动显示新版。"
+      : task?.status === "failed" ? `重生成失败，原报告已保留。${(task.errors || [])[0] || "可再次点击重试。"}` : "";
+  }
+
+  async function regenerateReport(reportId = state.currentReport?.report_id) {
+    if (!reportId || state.regeneratingReportId === reportId) return;
+    if (state.currentReport?.report_id !== reportId) await openReport(reportId);
+    const report = state.currentReport;
+    if (!report?.can_regenerate || report.user_id !== currentUser()) return;
+    state.regeneratingReportId = reportId;
+    updateRegenerateReportButton();
+    try {
+      if (!await ensureLlmReadyForReading()) return;
+      const data = await api("/api/reports/regenerate", {method:"POST", body:JSON.stringify({
+        user_id: report.user_id, report_id: reportId, response_language: responseLanguage()
+      })});
+      if (state.currentReport?.report_id === reportId) state.currentReport.regeneration_task = data.task;
+      showFeedbackToast("info", data.already_running ? "这篇报告正在生成" : "已开始重新生成", "成功后显示新版，失败会保留原报告。");
+      state.regenerationPollTask = data.task?.task_id;
+      await pollReadingTask(data.task?.task_id, reportId);
+    } finally {
+      state.regeneratingReportId = "";
+      state.regenerationPollTask = "";
+      updateRegenerateReportButton();
+    }
   }
 
   async function loadReportContent(reportId, silent = false) {
@@ -3546,6 +3594,13 @@
     $("clearReportAnnotationsBtn").disabled = !annotatedHtml;
     hideReportAnnotationToolbar();
     setReportLinks(report);
+    updateRegenerateReportButton();
+    const task = report.regeneration_task;
+    if (task?.kind === "report_regeneration" && ["queued", "running"].includes(task.status) && state.regenerationPollTask !== task.task_id) {
+      state.regenerationPollTask = task.task_id;
+      pollReadingTask(task.task_id, report.report_id).catch(error => showFeedbackToast("error", "无法更新精读进度", error.message))
+        .finally(() => { if (state.regenerationPollTask === task.task_id) state.regenerationPollTask = ""; });
+    }
   }
 
   async function directRead(kind) {
@@ -6125,6 +6180,7 @@
         }
       });
     });
+    $("regenerateReportBtn").addEventListener("click", () => runAction(() => regenerateReport(), "重新生成精读"));
     $("copyReportPathBtn").addEventListener("click", () => runAction(async () => {
       const path = $("copyReportPathBtn").dataset.href || "";
       if (!path) {

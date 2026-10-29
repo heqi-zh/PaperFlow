@@ -3794,3 +3794,6 @@ body.chat-view .source-list.empty {
 .paper-tier { display: inline-block; margin: 5px 0 8px; padding: 3px 8px; border-radius: 6px; font-size: 11px; font-weight: 600; }
 .paper-tier.focus { color: #447357; background: #eef6ef; }
 .paper-tier.browse { color: #65778b; background: #f0f3f7; }
+
+#reportRegenerationStatus { margin: 0 0 12px; color: #65778b; font-size: 13px; line-height: 1.65; }
+#reportRegenerationStatus:empty { display: none; }

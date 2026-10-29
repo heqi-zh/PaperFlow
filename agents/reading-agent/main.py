@@ -2624,6 +2624,7 @@ def _save_reading_report_markdown(
     report_payload: Dict[str, Any],
     doc_url: Optional[str] = None,
     doc_token: Optional[str] = None,
+    output_path: Optional[str] = None,
 ) -> str:
     target_dir = _resolve_configured_dir(
         "PAPERFLOW_READING_REPORTS_DIR",
@@ -2632,12 +2633,16 @@ def _save_reading_report_markdown(
         user_id=user_id,
         category="reading_reports",
     )
+    if output_path:
+        target_dir = Path(output_path).resolve().parent
     obsidian_report = target_dir.name.startswith("Deep Reading - ")
     report_path = target_dir / (
         f"{_paper_title_file_stem(paper)}.md"
         if obsidian_report
         else f"{_paper_file_stem(paper)} - reading-report.md"
     )
+    if output_path:
+        report_path = Path(output_path).resolve()
     daily_note_path = _obsidian_daily_note_path(report_path, paper) if obsidian_report else None
     metadata = {
         "user_id": user_id,
@@ -2665,10 +2670,13 @@ def _save_reading_report_markdown(
         if value not in (None, "", [], {}):
             frontmatter.append(f"{key}: {json.dumps(value, ensure_ascii=False)}")
     frontmatter.extend(["---", ""])
-    report_path.write_text(
-        "\n".join(frontmatter) + report_content.strip() + "\n",
-        encoding="utf-8",
-    )
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=report_path.parent, suffix=".tmp", delete=False) as handle:
+        temp_path = Path(handle.name)
+        handle.write("\n".join(frontmatter) + report_content.strip() + "\n")
+    try:
+        temp_path.replace(report_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
     daily_note_written = _sync_obsidian_daily_note(
         user_id=user_id,
         paper=paper,
@@ -4848,7 +4856,7 @@ def create_reading_report(
     # 1. If this request comes from a specific uploaded PDF, reuse the existing
     # report when the same source key has already been processed successfully.
     existing_pdf_doc = None
-    if request_metadata.get("report_source_type") and request_metadata.get("report_source_key"):
+    if not request_metadata.get("force_regenerate") and request_metadata.get("report_source_type") and request_metadata.get("report_source_key"):
         existing_pdf_doc = _lookup_existing_pdf_report(user_id, request_metadata, selected_papers[0])
         if existing_pdf_doc:
             print(
@@ -4877,7 +4885,7 @@ def create_reading_report(
         except (TypeError, ValueError):
             continue
 
-    if selected_paper_ids:
+    if selected_paper_ids and not request_metadata.get("force_regenerate"):
         existing_reports_by_paper_id = get_existing_reading_reports_for_papers(user_id, selected_paper_ids)
 
     prepared_docs: List[Optional[Dict[str, Any]]] = [None] * len(selected_papers)
@@ -4947,6 +4955,14 @@ def create_reading_report(
                 response_language=response_language,
             )
             report_payload = _merge_report_payload(heuristic_payload, llm_payload)
+            if request_metadata.get("require_llm"):
+                if report_payload.get("generation_provider", "heuristic") in {"heuristic", "mock", "paperflow", ""}:
+                    raise RuntimeError("模型未成功生成精读，原报告已保留，请检查模型连接后重试。")
+                checked = _chinese_report_payload(report_payload) if response_language == "zh" else report_payload
+                required = ("clean_abstract_summary", "problem_analysis", "solution_approach", "paper_summary")
+                if any(not _clean_text(checked.get(key)) for key in required):
+                    raise RuntimeError("模型返回的精读不完整或语言不符，原报告已保留，请重试。")
+
             proposed_label = report_payload.get("recommendation_label")
             report_payload["recommendation_label"] = calibrate_recommendation_label(
                 enriched_paper,
@@ -5038,6 +5054,8 @@ def create_reading_report(
                 report_payload=report_payload,
                 doc_url=doc_url,
                 doc_token=doc_token,
+                **({"output_path": request_metadata["regenerate_report_path"]}
+                   if request_metadata.get("force_regenerate") and request_metadata.get("regenerate_report_path") else {}),
             )
             wiki_ingest_info = ingest_reading_report_to_wiki(
                 user_id=user_id,

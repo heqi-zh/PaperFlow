@@ -31,6 +31,7 @@ from paperflow import roles as role_utils
 from paperflow.recommendations import profile_fingerprint, scope_match
 from paperflow.translations import translate_papers
 from paperflow.editorial import review_candidates
+from paperflow.runtime import data_dir
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -3164,6 +3165,17 @@ def _reports_payload(docs: Iterable[Dict[str, Any]], *, write_feishu_requested: 
     }
 
 
+def _report_reading_task(report_id: str) -> Optional[Dict[str, Any]]:
+    with _READING_TASK_LOCK:
+        for task in reversed(list(_READING_TASKS.values())):
+            matches = task.get("source_report_id") == report_id or any(
+                doc.get("report_id") == report_id for doc in task.get("created_docs", [])
+            )
+            if matches and (task.get("kind") == "report_regeneration" or task.get("status") in {"queued", "running"}):
+                return {key: task.get(key) for key in ("task_id", "kind", "status", "errors")}
+    return None
+
+
 def _report_summary_payload(report: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "report_id": report["report_id"],
@@ -3182,6 +3194,8 @@ def _report_summary_payload(report: Dict[str, Any]) -> Dict[str, Any]:
         "generation_provider": report["generation_provider"],
         "generation_model": report["generation_model"],
         "snippet": report["snippet"],
+        "can_regenerate": bool(report.get("pdf_url") or report.get("abs_url") or any(report["metadata"].get(key) for key in ("paper_id", "arxiv_id", "doi", "pdf_path", "pdf_url", "abs_url", "paper_url"))),
+        "regeneration_task": _report_reading_task(report["report_id"]),
     }
 
 
@@ -3247,6 +3261,99 @@ def get_report_content(report_id: str) -> Dict[str, Any]:
             }
         }
     raise ValueError(f"Report not found: {normalized_id}")
+
+
+def start_report_regeneration(*, user_id: str, report_id: str, response_language: str = "zh") -> Dict[str, Any]:
+    report = next((item for item in _all_report_records() if item["report_id"] == report_id), None)
+    if not report or report["user_id"] != str(user_id or "").strip():
+        raise ValueError("未找到当前用户的报告")
+    path = Path(report["_path"]).resolve()
+    if path.suffix.lower() != ".md" or not any(path.is_relative_to(root.resolve()) for root in _reading_report_dirs()):
+        raise ValueError("报告不在配置的报告目录中")
+    metadata = report["metadata"]
+    paper = {}
+    if metadata.get("paper_id"):
+        with db_ops.connection() as conn:
+            row = conn.execute("""SELECT p.*, (SELECT metadata FROM behavior_logs
+                WHERE user_id = ? AND paper_id = p.id AND action = 'pushed' ORDER BY id DESC LIMIT 1) AS metadata
+                FROM papers p WHERE p.id = ?""", (user_id, metadata["paper_id"])).fetchone()
+        if row:
+            paper = db_ops._build_paper_dict(row)
+    for key in ("arxiv_id", "doi", "title", "authors", "abstract", "publish_date", "pdf_path", "pdf_url", "abs_url", "paper_url", "source"):
+        if metadata.get(key) not in (None, "", [], {}):
+            paper[key] = metadata[key]
+    for key in ("arxiv_id", "pdf_url", "abs_url"):
+        if not paper.get(key) and report.get(key):
+            paper[key] = report[key]
+    if not paper.get("id") and metadata.get("paper_id"):
+        paper["id"] = metadata["paper_id"]
+    local_pdf = Path(str(paper.get("pdf_path") or "")).expanduser()
+    if paper.get("pdf_path") and not local_pdf.is_absolute():
+        local_pdf = PROJECT_ROOT / local_pdf
+    if paper.get("pdf_path") and local_pdf.is_file():
+        paper["pdf_path"] = str(local_pdf)
+    if not (paper.get("arxiv_id") or paper.get("doi") or paper.get("pdf_url") or paper.get("abs_url") or paper.get("paper_url") or (paper.get("pdf_path") and local_pdf.is_file())):
+        raise ValueError("此报告缺少可重读的论文链接或本地 PDF")
+    paper.setdefault("title", report["title"])
+    now = _task_timestamp()
+    with _READING_TASK_LOCK:
+        for task in _READING_TASKS.values():
+            same_report = task.get("source_report_id") == report_id or any(doc.get("report_id") == report_id for doc in task.get("created_docs", []))
+            if same_report and task.get("status") in {"queued", "running"}:
+                return {"task": _reading_task_payload(task), "already_running": True}
+        task_id = f"regenerate_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+        task = {
+            "task_id": task_id, "kind": "report_regeneration", "source_report_id": report_id,
+            "user_id": user_id, "status": "queued", "progress_phase": "queued",
+            "created_at": now, "updated_at": now, "total_count": 1, "completed_count": 0, "failed_count": 0,
+            "response_language": _normalize_response_language(response_language),
+            "created_docs": [{"report_id": report_id, "title": report["title"], "report_path": str(path)}],
+            "internal_docs": [{"paper_raw": paper, "report_path": str(path)}], "errors": [],
+        }
+        thread = threading.Thread(target=_finish_report_regeneration, args=(task_id,), daemon=True)
+        task["thread"] = thread
+        _READING_TASKS[task_id] = task
+        _prune_task_registry(_READING_TASKS)
+        snapshot = _reading_task_payload(task)
+    thread.start()
+    return {"task": snapshot, "already_running": False}
+
+
+def _finish_report_regeneration(task_id: str) -> None:
+    with _READING_TASK_LOCK:
+        task = _READING_TASKS.get(task_id)
+        if not task:
+            return
+        task.update(status="running", progress_phase="reading", updated_at=_task_timestamp())
+    doc = task["internal_docs"][0]
+    path = Path(doc["report_path"])
+    original = None
+    try:
+        original = path.read_bytes()
+        backup = data_dir() / "report_backups" / task["source_report_id"] / f"{task_id}.md"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_bytes(original)
+        with _reading_agent_output_env_patch(), _local_only_feishu_doc_patch(True):
+            docs = reading_agent.create_reading_report(
+                user_id=task["user_id"], paper_ids=[], papers=[doc["paper_raw"]], send_to_feishu=False,
+                request_metadata={"force_regenerate": True, "require_llm": True, "report_style": _configured_report_style(),
+                                  "regenerate_report_path": str(path), "response_language": task["response_language"]},
+            )
+        if not docs or docs[0].get("reused") or not path.is_file():
+            raise RuntimeError("重生成未完成，原报告已保留，请检查模型连接后重试。")
+        invalidate_report_cache(path)
+        with _READING_TASK_LOCK:
+            task.update(status="completed", progress_phase="completed", completed_count=1,
+                        created_docs=_doc_payloads(docs), completed_at=_task_timestamp(), updated_at=_task_timestamp())
+    except Exception as exc:
+        if original is not None and (not path.exists() or path.read_bytes() != original):
+            restore = path.with_name(path.name + f".{uuid4().hex}.restore")
+            restore.write_bytes(original)
+            restore.replace(path)
+        invalidate_report_cache(path)
+        with _READING_TASK_LOCK:
+            task.update(status="failed", progress_phase="failed", failed_count=1, errors=[str(exc)],
+                        completed_at=_task_timestamp(), updated_at=_task_timestamp())
 
 
 def delete_report(report_id: str) -> Dict[str, Any]:

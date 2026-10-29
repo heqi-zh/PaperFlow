@@ -484,6 +484,9 @@ POST_ROUTES: Dict[str, ApiHandler] = {
     "/api/read/pdf": _api_read_pdf,
     "/api/submit": _api_submit,
     "/api/reports/delete": _api_report_delete,
+    "/api/reports/regenerate": lambda q, b: agents.start_report_regeneration(
+        user_id=str(b.get("user_id") or "").strip(), report_id=str(b.get("report_id") or "").strip(),
+        response_language=str(b.get("response_language") or "zh")),
     "/api/wiki/ask": _api_wiki_ask,
     "/api/wiki/ask/stream": _api_wiki_ask,
     "/api/wiki/refresh": _api_wiki_refresh,
